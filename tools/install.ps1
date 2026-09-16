@@ -1064,8 +1064,9 @@ Say '   1. Node.js 运行时（仅在缺失时安装）'
 Say '   2. 官方 DSH 命令行工具（含 web 端）+ pnpm'
 Say '   3. 桌面快捷方式（双击即打开 DSH 网页界面）'
 Write-Host ''
-Say '以下两项供知识库（kb-rag 插件）使用，是否安装由你决定；第 3 步将进行询问：'
-Say '直接回车表示安装（默认）；输入 n 表示只安装官方 DSH web，日后需要时重新运行本脚本即可。'
+Say '以下两项供知识库（kb-rag 插件）使用。第 3 步会问你是否安装：'
+Say 'kb-rag 是本安装器作者另一个开源项目，所以会被推荐 —— 但它完全可选，不装没有任何损失。'
+Say '直接回车＝装；输入 n ＝不装，只留官方 DSH web。日后想装了，重新运行本脚本即可。'
 Say '   4. kb-rag 本地文献知识库插件（可读取论文并带引用回答）'
 Say '   5. Python 环境、插件依赖、检索模型'
 Write-Host ''
@@ -1264,7 +1265,7 @@ Head '第 3 步 / 安装或更新 kb-rag 插件'
 if ($SkipPlugin) {
   Skip '按参数要求跳过插件步骤'
   Record '插件 kb-rag' '跳过' '命令行指定 -SkipPlugin'
-} elseif (-not (Ask-YesNo '是否安装 kb-rag 文献知识库插件？（直接回车表示安装；输入 n 表示只安装官方 DSH web，不含知识库功能）' $true)) {
+} elseif (-not (Ask-YesNo '是否安装 kb-rag 文献知识库插件？（本安装器作者的另一个开源项目，推荐但可选：回车＝装，n ＝不装，只留官方 DSH web）' $true)) {
   # 允许用户只要官方 DSH web：回车＝照旧装插件，回答 n ＝跳过插件（第 4 步的 Python/引擎也跟着跳过）
   $script:WantPlugin = $false
   Skip '已选择只安装官方 DSH web；日后如需知识库功能，重新运行本脚本并在本步骤回车即可'

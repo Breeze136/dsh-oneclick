@@ -27,6 +27,11 @@ unzip it anywhere, and double-click `install.cmd`.
 Either route runs the same installer. That is the whole manual: re-running it
 updates whatever is out of date and skips everything else.
 
+Part-way through, it offers the author's own `dsh-kb-rag` knowledge-base plugin.
+That offer is a recommendation, not a requirement — answering `n` is a normal
+choice, not a degraded install. [What it does](#what-it-does) spells out exactly
+what changes either way.
+
 ## What it does
 
 | Step | Action |
@@ -34,8 +39,13 @@ updates whatever is out of date and skips everything else.
 | 1 | **Node.js** — uses an existing install; if there is none, unpacks the official Windows zip into `%LOCALAPPDATA%\DSH\node` (no administrator rights, system `PATH` untouched) |
 | 2 | **DSH CLI + pnpm** — `npm install -g @deepseek-ai/dsh pnpm` (official CLI, ships the web app) |
 | 3 | **Shortcut** — a desktop shortcut named *DeepSeek Harness* that starts the web app and opens the browser |
-| 4 | **kb-rag knowledge base (optional)** — asked once during the run; Enter installs it (`dsh plugin --profile web add dsh-kb-rag@<resolved version>`), `n` skips it and leaves you with plain official DSH |
+| 4 | **kb-rag knowledge base — offered, not required** — this plugin is the installer author's other open-source project, so the installer recommends it and asks once (`dsh plugin --profile web add dsh-kb-rag@<resolved version>`). Enter installs it; `n` skips it and leaves you with plain official DSH |
 | 5 | **Engine (only with the plugin)** — delegates to the plugin's own `scripts/install.ps1` for Python dependencies and the ~1.2 GB of retrieval models |
+
+Steps 4 and 5 are the only ones that are about **the author's own work rather than
+DeepSeek's**. The recommendation is genuine, but so is the opt-out: answering `n`
+gives you exactly the official setup, changes nothing else in the run, and the
+installer will not ask again unless you run it again.
 
 Everything is installed per-user. No service is registered, nothing is added to
 startup, and no existing session, workspace or credential under `~/.dsh` is ever
