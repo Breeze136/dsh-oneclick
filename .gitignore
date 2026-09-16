@@ -1,0 +1,18 @@
+# Release output (produced by tools/make-release.ps1; never committed)
+发布/
+
+# Optional offline payload: the ~36 MB portable Node zip. The README.txt here
+# documents it and IS tracked; the archives themselves are not.
+payload/*.zip
+payload/*.tar.gz
+payload/*.7z
+
+# Local run/debug output
+*.log
+*.tmp
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

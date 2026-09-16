@@ -1,0 +1,13 @@
+# Keep every byte exactly as committed.
+#
+# Why this file exists: this repo ships a sha256.txt manifest so users can verify that the
+# files they received are the ones we published. Any git-side line-ending conversion would
+# silently break that check -- a single checkout turning LF into CRLF makes every hash
+# mismatch, and the failure looks like "the download was tampered with".
+#
+# The tree is deliberately mixed today (docs are LF, install.ps1 and install.cmd are CRLF),
+# so we do NOT normalise: `-text` tells git to store and check out files verbatim.
+* -text
+
+# Binaries (declared explicitly so they are never diffed as text)
+*.ico binary
