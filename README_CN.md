@@ -6,12 +6,16 @@
 
 ## 安装
 
-**[下载最新发行包](https://github.com/Breeze136/dsh-oneclick/releases/latest)**，解压到任意目录，双击 `install.cmd`。
+**会用命令行** —— 什么都不用先下载：
 
-这就是全部说明。重复运行即为更新：有新版就升级，已经装好的自动跳过。
+```
+npx dsh-oneclick
+```
 
-> **`npx dsh-oneclick` 目前还不能用。** 这个包尚未发布到 npm，这条命令现在会返回 404。
-> 在它发布之前，请用上面的发行包。
+**不想碰命令行** —— [下载最新发行包](https://github.com/Breeze136/dsh-oneclick/releases/latest)，
+解压到任意目录，双击 `install.cmd`。
+
+两条路跑的是同一个安装器。这就是全部说明：重复运行即为更新，有新版就升级，已经装好的自动跳过。
 
 ## 为什么需要它
 
@@ -47,22 +51,23 @@
 
 ## 命令行选项
 
-双击 `install.cmd` 不需要任何参数。要加参数，就在解压后的目录里开一个终端，用 PowerShell 风格的写法：
+双击 `install.cmd` 不需要任何参数。参数有两套写法，含义完全一样 —— 按你装的哪条路选一列即可：
 
-```
-install.cmd -CheckOnly              # 只体检，不做任何改动
-install.cmd -DryRun                 # 打印将要做什么，不下载不安装
-install.cmd -SkipPlugin             # 只装官方 DSH，不要 kb-rag 知识库
-install.cmd -NoModels               # 跳过约 1.2 GB 的检索模型
-install.cmd -NoShortcut             # 不创建桌面快捷方式
-install.cmd -PluginVersion 1.6.7
-install.cmd -Yes                    # 所有提问都用默认答案
-```
+| 想做什么 | `npx` 路线 | 发行包 |
+|---|---|---|
+| 只体检，不做任何改动 | `npx dsh-oneclick --check` | `install.cmd -CheckOnly` |
+| 打印将要做什么，不下载不安装 | `npx dsh-oneclick --dry-run` | `install.cmd -DryRun` |
+| 只测下载通道 | `npx dsh-oneclick --self-test` | `install.cmd -SelfTest` |
+| 只装官方 DSH，不要 kb-rag 知识库 | `npx dsh-oneclick --no-plugin` | `install.cmd -SkipPlugin` |
+| 跳过约 1.2 GB 的检索模型 | `npx dsh-oneclick --no-models` | `install.cmd -NoModels` |
+| 不创建桌面快捷方式 | `npx dsh-oneclick --no-shortcut` | `install.cmd -NoShortcut` |
+| 指定插件版本 | `npx dsh-oneclick --plugin-version 1.6.7` | `install.cmd -PluginVersion 1.6.7` |
+| 所有提问都用默认答案 | `npx dsh-oneclick --yes` | `install.cmd -Yes` |
+| 看完整列表 | `npx dsh-oneclick --help` | 见 `tools/install.ps1` 顶部的参数块 |
 
-其余参数 —— `-SkipNode`、`-SkipDshCli`、`-SkipEngine`、`-SelfTest`、`-WorkDir`、
-`-PipMirror`、`-NpmRegistry`、`-NoPause` —— 都在 `tools/install.ps1` 顶部的参数块里。
-
-等这个包发到 npm 之后，`npx dsh-oneclick --check` 这类 `--` 写法可以做同样的事，而且不用先下载。
+其余开关 —— `-SkipNode`、`-SkipDshCli`、`-SkipEngine`、`-WorkDir`、`-PipMirror`、
+`-NpmRegistry`、`-NoPause` —— 两条路都有，名字就是参数块里那些；`npx` 也直接认
+PowerShell 风格的写法。
 
 ## 离线 / 走镜像
 
@@ -72,7 +77,7 @@ Node 就不会联网下载。其余组件仍然来自 npm。
 
 ## 发行压缩包
 
-zip 就是当前推荐的分发方式：解压后双击 `install.cmd` 即可，不需要 Node、不需要命令行。
+给不想碰命令行的人：解压后双击 `install.cmd` 即可，不需要先有 Node、也不需要开终端。
 压缩包里额外带三份中文文档：
 
 - `GETTING-STARTED.txt` —— 装之前看：装了什么、怎么用、出问题怎么办
@@ -110,7 +115,9 @@ DeepSeek 的名称与标识归其权利人所有，图标的准确出处和授�
 ## 目录结构
 
 ```
-install.cmd              双击入口（本仓库实际提供的那条路）
+bin.mjs                  npx 入口（参数翻译 + 交给 install.ps1）
+package.json             npm 包清单（bin / files / 版本号）
+install.cmd              发行包的双击入口
 tools/install.ps1        安装逻辑
 tools/dsh-web.ps1        桌面快捷方式背后的启动器
 tools/make-release.ps1   打开发行压缩包
@@ -121,11 +128,14 @@ MODEL-SETUP.txt          模型接入教程（中文）
 NEXT-STEPS.txt           装完之后做什么（中文）
 COMPAT.md                与 kb-rag 插件之间的依赖契约（包名 / profile / 引擎入口 / 参数）
 sha256.txt               发行压缩包里每个文件的校验值
-VERSION.txt              版本号与维护记录（不进发行包）
+VERSION.txt              版本号与维护记录（两条分发路都不带它）
 ```
 
-发行 zip 里只有双击用户需要的那部分。npm 包所需的 `bin.mjs` 和 `package.json`
-不在本仓库里，包也还没发到 npm，所以现在没有东西可以 `npx` —— 见[安装](#安装)。
+一份源码、两个分发口，各自只装自己需要的部分：npm 包多出 `bin.mjs` + `package.json`，
+发行 zip 多出 `install.cmd` 和三份中文文档。`tools/make-release.ps1` 会把 npm 那两个文件
+（连同 `VERSION.txt` 和它自己）排除在 zip 之外；`package.json` 的 `files` 列表则把维护者
+专用的文件排除在 tarball 之外。脚本还会校验 `VERSION.txt`、`tools/install.ps1`、
+`package.json` 三处版本号一致，不一致就拒绝打包。
 
 ## 许可证
 

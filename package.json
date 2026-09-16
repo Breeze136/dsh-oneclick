@@ -1,0 +1,58 @@
+{
+  "name": "dsh-oneclick",
+  "version": "1.1.1",
+  "description": "One-click Windows installer for the official DeepSeek Harness web app (@deepseek-ai/dsh): Node.js, the DSH CLI, an optional literature knowledge-base plugin with its Python engine and retrieval models, and a desktop shortcut that just works. Third-party helper, not published by DeepSeek.",
+  "type": "module",
+  "bin": {
+    "dsh-oneclick": "./bin.mjs"
+  },
+  "files": [
+    "bin.mjs",
+    "install.cmd",
+    "tools/install.ps1",
+    "tools/dsh-web.ps1",
+    "assets/deepseek.ico",
+    "assets/ICON-SOURCE.txt",
+    "payload/README.txt",
+    "GETTING-STARTED.txt",
+    "MODEL-SETUP.txt",
+    "NEXT-STEPS.txt",
+    "COMPAT.md",
+    "README.md",
+    "README_CN.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek",
+    "deepseek-harness",
+    "installer",
+    "one-click",
+    "bootstrap",
+    "windows",
+    "setup",
+    "rag",
+    "knowledge-base"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Breeze136/dsh-oneclick.git"
+  },
+  "homepage": "https://github.com/Breeze136/dsh-oneclick#readme",
+  "bugs": {
+    "url": "https://github.com/Breeze136/dsh-oneclick/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "win32"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build:release": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/make-release.ps1"
+  }
+}

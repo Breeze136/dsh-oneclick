@@ -15,15 +15,17 @@ that just works.
 
 ## Install
 
-**[Download the latest release](https://github.com/Breeze136/dsh-oneclick/releases/latest)**,
+**With a terminal** — nothing to download first:
+
+```
+npx dsh-oneclick
+```
+
+**Without one** — [download the latest release](https://github.com/Breeze136/dsh-oneclick/releases/latest),
 unzip it anywhere, and double-click `install.cmd`.
 
-That is the whole manual. Re-running it updates whatever is out of date and
-skips everything else.
-
-> **`npx dsh-oneclick` does not work yet.** The package has not been published to
-> npm, so that command currently returns 404. The release download above is the
-> supported route until it is published.
+Either route runs the same installer. That is the whole manual: re-running it
+updates whatever is out of date and skips everything else.
 
 ## What it does
 
@@ -49,25 +51,24 @@ deleted — re-running only updates the plugin.
 
 ## Options
 
-Double-clicking `install.cmd` needs no arguments. To pass flags, open a terminal
-in the unzipped folder and run it with PowerShell-style names:
+Double-clicking `install.cmd` needs no arguments. Flags come in two spellings
+that mean exactly the same thing — pick whichever route you installed by:
 
-```
-install.cmd -CheckOnly              # inspect only, change nothing
-install.cmd -DryRun                 # print the plan, install nothing
-install.cmd -SkipPlugin             # official DSH only, no kb-rag
-install.cmd -NoModels               # skip the ~1.2 GB of retrieval models
-install.cmd -NoShortcut             # do not create the desktop shortcut
-install.cmd -PluginVersion 1.6.7
-install.cmd -Yes                    # never prompt
-```
+| What you want | `npx` route | release archive |
+|---|---|---|
+| inspect the machine only, change nothing | `npx dsh-oneclick --check` | `install.cmd -CheckOnly` |
+| print the plan, install nothing | `npx dsh-oneclick --dry-run` | `install.cmd -DryRun` |
+| test the download channels only | `npx dsh-oneclick --self-test` | `install.cmd -SelfTest` |
+| official DSH only, no kb-rag | `npx dsh-oneclick --no-plugin` | `install.cmd -SkipPlugin` |
+| skip the ~1.2 GB of retrieval models | `npx dsh-oneclick --no-models` | `install.cmd -NoModels` |
+| do not create the desktop shortcut | `npx dsh-oneclick --no-shortcut` | `install.cmd -NoShortcut` |
+| pin the plugin version | `npx dsh-oneclick --plugin-version 1.6.7` | `install.cmd -PluginVersion 1.6.7` |
+| never prompt | `npx dsh-oneclick --yes` | `install.cmd -Yes` |
+| the full list | `npx dsh-oneclick --help` | see the parameter block at the top of `tools/install.ps1` |
 
-The rest — `-SkipNode`, `-SkipDshCli`, `-SkipEngine`, `-SelfTest`, `-WorkDir`,
-`-PipMirror`, `-NpmRegistry`, `-NoPause` — are listed in the parameter block at
-the top of `tools/install.ps1`.
-
-Once the package reaches npm, `npx dsh-oneclick --check` and the other
-`--`-style spellings do the same thing without the download.
+The remaining switches — `-SkipNode`, `-SkipDshCli`, `-SkipEngine`, `-WorkDir`,
+`-PipMirror`, `-NpmRegistry`, `-NoPause` — exist in both routes under the names
+shown in that parameter block; `npx` accepts the PowerShell spellings as-is.
 
 ## Offline or mirrored install
 
@@ -78,10 +79,11 @@ else still comes from npm.
 
 ## The release archive
 
-The zip is the supported distribution route: unzip it and double-click
-`install.cmd`. It carries the same installer plus three short Chinese guides —
-`GETTING-STARTED.txt`, `MODEL-SETUP.txt` and `NEXT-STEPS.txt` — and it is also
-the route for file-sharing sites and USB sticks, where `npx` is not an option.
+For handing this to someone who would rather not touch a terminal, use the zip:
+unzip it and double-click `install.cmd`. It carries the same installer plus
+three short Chinese guides — `GETTING-STARTED.txt`, `MODEL-SETUP.txt` and
+`NEXT-STEPS.txt` — and it is also the route for file-sharing sites and USB
+sticks, where `npx` is not an option.
 
 Rebuild it from the repository root with:
 
@@ -115,7 +117,9 @@ license note.
 ## Layout
 
 ```
-install.cmd              double-click entry (the route this repository ships)
+bin.mjs                  npx entry point (flag translation + hand-off to install.ps1)
+package.json             npm package manifest (bin, files, version)
+install.cmd              double-click entry for the release archive
 tools/install.ps1        the installer
 tools/dsh-web.ps1        launcher behind the desktop shortcut
 tools/make-release.ps1   builds the release archive
@@ -126,12 +130,16 @@ MODEL-SETUP.txt          model/API-key walkthrough (Chinese)
 NEXT-STEPS.txt           what to do right after the installer finishes (Chinese)
 COMPAT.md                contract with the kb-rag plugin (package name, profile, engine entry, flags)
 sha256.txt               hashes of every file in the release archive
-VERSION.txt              version number + maintainer change log (not shipped in the archive)
+VERSION.txt              version number + maintainer change log (not shipped in either route)
 ```
 
-The release archive ships only the subset a double-click user needs. The npm
-package files (`bin.mjs`, `package.json`) are not in this repository and the
-package is not on npm, so there is nothing to `npx` yet — see [Install](#install).
+One repository, two distribution routes, each shipping only what its audience
+needs: the npm package adds `bin.mjs` + `package.json`, the release archive adds
+`install.cmd` and the Chinese guides. `tools/make-release.ps1` excludes the npm
+files (and `VERSION.txt`, and itself) from the zip; `package.json`'s `files`
+list excludes the maintainer-only files from the tarball. A version-consistency
+check keeps `VERSION.txt`, `tools/install.ps1` and `package.json` in step, and
+refuses to build when they disagree.
 
 The three beginner guides (and the installer's own comments) are written in
 Chinese because that is the audience the release archive is built for; this
