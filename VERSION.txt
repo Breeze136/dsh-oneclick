@@ -163,6 +163,17 @@ v1.1.1（本次发布）：
         发版脚本会校验它与 VERSION.txt 首行一致，不一致**拒绝打包**。
       - GETTING-STARTED.txt 新增「第 0 步：先把压缩包解压出来」，并补两条高频困惑：
         窗口像卡住 = 点到了窗口进入「选择文本」状态（按回车恢复）、以及不要用管理员运行。
+  * 正式指向一键装自己的仓库（维护者已建仓 Breeze136/dsh-oneclick）：
+      - `$RepoUrl` 由 Breeze136/dsh-kb-rag 改为 **Breeze136/dsh-oneclick** —— 安装器结尾的
+        「求 star」与「有问题去 issue」都跟着换。之前指向插件仓库只是权宜：安装器的报错
+        （执行策略、pnpm、Python）会涌进插件的 issue 列表，两边维护线索混在一起。
+      - 仓库侧就绪：仓库根 = 包目录，因此 VERSION.txt 与 tools\make-release.ps1 这两个
+        「开发用、不随发布包分发」的文件正好待在仓库里；已提交首个 commit（18 个文件）。
+      - 另加 `.gitattributes`（`* -text`）钉死行尾：本仓库靠 sha256.txt 校验用户拿到的文件，
+        绝不能让 git 在 checkout 时改写行尾 —— 一次 LF/CRLF 转换就让所有校验值对不上，
+        而用户看到的现象是"下载的文件被人动过"。已用 `git restore .` 往返实测：逐字节无损。
+      - `.gitignore` 排除 发布\、payload 压缩包、日志与编辑器产物；这两个 git 配置文件
+        都由打包脚本排除，不进发布包（且豁免 BOM 检查 —— .gitignore 的 BOM 会破坏首条规则）。
 
 v1.1.0（本次发布）：
   * 知识库插件改成可选：第 3 步问「要不要装 kb-rag」，回车＝装（默认），

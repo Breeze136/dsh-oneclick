@@ -79,10 +79,11 @@ $RootDir   = Split-Path -Parent $ScriptDir
 $UserAgent = 'DSH-Newbie-Installer/2.0'
 # 项目地址：结尾的「求 star」和「有问题去 issue」都由它派生（issues 就是 + '/issues'）。
 # 只改这一行就能换仓库。
-# 注意：一键装自己的仓库（dsh-oneclick）目前还没有，所以这里先指向这个包真正在装的
-# 那个项目（Breeze136/dsh-kb-rag，仓库存在、Issues 开着）。等一键装独立建仓后改这里。
+# 现在指向一键装自己的仓库（Breeze136/dsh-oneclick，2026-09-16 建立）。
+# 之前因为该仓库还不存在，临时指向过插件仓库 Breeze136/dsh-kb-rag —— 那样做的代价是
+# 安装器的报错会涌进插件的 issue 列表，两边的维护线索混在一起。
 # 千万别指一个不存在的地址：新手点开是 404，比不引导还糟。
-$RepoUrl = 'https://github.com/Breeze136/dsh-kb-rag'
+$RepoUrl = 'https://github.com/Breeze136/dsh-oneclick'
 
 # 安装包版本。VERSION.txt 不随发布包分发（打包脚本会排除它），所以版本号必须在这里也有一份，
 # 并且**要和 VERSION.txt 首行一致** —— tools\make-release.ps1 打包前会校验这一点，不一致就
