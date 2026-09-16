@@ -4,7 +4,7 @@
   "description": "One-click Windows installer for the official DeepSeek Harness web app (@deepseek-ai/dsh): Node.js, the DSH CLI, an optional literature knowledge-base plugin with its Python engine and retrieval models, and a desktop shortcut that just works. Third-party helper, not published by DeepSeek.",
   "type": "module",
   "bin": {
-    "dsh-oneclick": "./bin.mjs"
+    "dsh-oneclick": "bin.mjs"
   },
   "files": [
     "bin.mjs",
