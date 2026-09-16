@@ -124,6 +124,9 @@ foreach ($f in (Get-ChildItem $RootDir -Recurse -File)) {
       if ($hasBom) { $encBad += ('不该带 BOM（cmd.exe 按 OEM 代码页解析）：' + $rel) }
       if ($nonAscii) { $encBad += ('含非 ASCII 字节（cmd 里会乱码）：' + $rel) }
     }
+    # git 的配置文件由 git 自己按 UTF-8 读取，**不能**加 BOM：
+    # .gitignore 的 BOM 会被当成第一条规则的一部分，反而让那条规则失效。
+    { $_ -in @('.gitignore', '.gitattributes') } { }
     default { if ($nonAscii -and -not $hasBom) { $encBad += ('含中文但无 BOM：' + $rel) } }
   }
 }
