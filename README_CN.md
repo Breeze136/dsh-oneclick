@@ -4,11 +4,14 @@
 
 [English](README.md) | 简体中文
 
-```
-npx dsh-oneclick
-```
+## 安装
+
+**[下载最新发行包](https://github.com/Breeze136/dsh-oneclick/releases/latest)**，解压到任意目录，双击 `install.cmd`。
 
 这就是全部说明。重复运行即为更新：有新版就升级，已经装好的自动跳过。
+
+> **`npx dsh-oneclick` 目前还不能用。** 这个包尚未发布到 npm，这条命令现在会返回 404。
+> 在它发布之前，请用上面的发行包。
 
 ## 为什么需要它
 
@@ -44,16 +47,22 @@ npx dsh-oneclick
 
 ## 命令行选项
 
+双击 `install.cmd` 不需要任何参数。要加参数，就在解压后的目录里开一个终端，用 PowerShell 风格的写法：
+
 ```
-npx dsh-oneclick --check              # 只体检，不做任何改动
-npx dsh-oneclick --dry-run            # 打印将要做什么，不下载不安装
-npx dsh-oneclick --no-plugin          # 只装官方 DSH，不要 kb-rag 知识库
-npx dsh-oneclick --no-models          # 跳过约 1.2 GB 的检索模型
-npx dsh-oneclick --no-shortcut        # 不创建桌面快捷方式
-npx dsh-oneclick --plugin-version 1.6.7
-npx dsh-oneclick --yes                # 所有提问都用默认答案
-npx dsh-oneclick --help               # 完整列表
+install.cmd -CheckOnly              # 只体检，不做任何改动
+install.cmd -DryRun                 # 打印将要做什么，不下载不安装
+install.cmd -SkipPlugin             # 只装官方 DSH，不要 kb-rag 知识库
+install.cmd -NoModels               # 跳过约 1.2 GB 的检索模型
+install.cmd -NoShortcut             # 不创建桌面快捷方式
+install.cmd -PluginVersion 1.6.7
+install.cmd -Yes                    # 所有提问都用默认答案
 ```
+
+其余参数 —— `-SkipNode`、`-SkipDshCli`、`-SkipEngine`、`-SelfTest`、`-WorkDir`、
+`-PipMirror`、`-NpmRegistry`、`-NoPause` —— 都在 `tools/install.ps1` 顶部的参数块里。
+
+等这个包发到 npm 之后，`npx dsh-oneclick --check` 这类 `--` 写法可以做同样的事，而且不用先下载。
 
 ## 离线 / 走镜像
 
@@ -61,20 +70,25 @@ npx dsh-oneclick --help               # 完整列表
 `node-v24.21.0-win-x64.zip` 放进去（会按官方 `SHASUMS256.txt` 里的 sha256 校验），
 Node 就不会联网下载。其余组件仍然来自 npm。
 
-## 发行压缩包（给不想碰命令行的人）
+## 发行压缩包
 
-把 zip 解压后双击 `install.cmd` 即可，不需要 Node、不需要命令行。压缩包里额外带两份中文文档：
+zip 就是当前推荐的分发方式：解压后双击 `install.cmd` 即可，不需要 Node、不需要命令行。
+压缩包里额外带三份中文文档：
 
 - `GETTING-STARTED.txt` —— 装之前看：装了什么、怎么用、出问题怎么办
 - `MODEL-SETUP.txt` —— 装完看：第一次打开要填 API Key，去哪申请、怎么填、报错怎么查
+- `NEXT-STEPS.txt` —— 装完之后照着一步步做
 
-这条路径也适合网盘、U 盘这类分发方式。
+网盘、U 盘这类分发方式也走它。
 
-自己打包：
+在仓库根目录重新打包：
 
 ```
-npm run build:release
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\make-release.ps1
 ```
+
+脚本会按**实际进包的文件**重算 `sha256.txt`，并把压缩包自身的 SHA-256 打出来 ——
+那个值就是发布时该贴在下载旁边的那个。
 
 ## 装完之后
 
@@ -96,18 +110,22 @@ DeepSeek 的名称与标识归其权利人所有，图标的准确出处和授�
 ## 目录结构
 
 ```
-bin.mjs                  npx 入口（参数翻译 + 交给安装脚本）
-install.cmd              zip 用户双击的入口
+install.cmd              双击入口（本仓库实际提供的那条路）
 tools/install.ps1        安装逻辑
 tools/dsh-web.ps1        桌面快捷方式背后的启动器
+tools/make-release.ps1   打开发行压缩包
 assets/                  图标与出处说明
+payload/                 把官方 Node 压缩包放这里即可离线安装
 GETTING-STARTED.txt      新手说明（中文）
 MODEL-SETUP.txt          模型接入教程（中文）
-tools/dev/               维护脚本（打包、生成图标）
+NEXT-STEPS.txt           装完之后做什么（中文）
 COMPAT.md                与 kb-rag 插件之间的依赖契约（包名 / profile / 引擎入口 / 参数）
+sha256.txt               发行压缩包里每个文件的校验值
+VERSION.txt              版本号与维护记录（不进发行包）
 ```
 
-发行 zip 里只有双击用户需要的那部分（不含 `bin.mjs` 和 `tools/dev/`）。
+发行 zip 里只有双击用户需要的那部分。npm 包所需的 `bin.mjs` 和 `package.json`
+不在本仓库里，包也还没发到 npm，所以现在没有东西可以 `npx` —— 见[安装](#安装)。
 
 ## 许可证
 

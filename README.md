@@ -13,12 +13,17 @@ visited gets 401; after the first visit a 30-day cookie makes it work). This
 installer does all of it, verifies every download, and leaves a desktop shortcut
 that just works.
 
-```
-npx dsh-oneclick
-```
+## Install
+
+**[Download the latest release](https://github.com/Breeze136/dsh-oneclick/releases/latest)**,
+unzip it anywhere, and double-click `install.cmd`.
 
 That is the whole manual. Re-running it updates whatever is out of date and
 skips everything else.
+
+> **`npx dsh-oneclick` does not work yet.** The package has not been published to
+> npm, so that command currently returns 404. The release download above is the
+> supported route until it is published.
 
 ## What it does
 
@@ -44,16 +49,25 @@ deleted — re-running only updates the plugin.
 
 ## Options
 
+Double-clicking `install.cmd` needs no arguments. To pass flags, open a terminal
+in the unzipped folder and run it with PowerShell-style names:
+
 ```
-npx dsh-oneclick --check              # inspect only, change nothing
-npx dsh-oneclick --dry-run            # print the plan, install nothing
-npx dsh-oneclick --no-plugin          # official DSH only, no kb-rag
-npx dsh-oneclick --no-models          # skip the ~1.2 GB of retrieval models
-npx dsh-oneclick --no-shortcut        # do not create the desktop shortcut
-npx dsh-oneclick --plugin-version 1.6.7
-npx dsh-oneclick --yes                # never prompt
-npx dsh-oneclick --help               # the full list
+install.cmd -CheckOnly              # inspect only, change nothing
+install.cmd -DryRun                 # print the plan, install nothing
+install.cmd -SkipPlugin             # official DSH only, no kb-rag
+install.cmd -NoModels               # skip the ~1.2 GB of retrieval models
+install.cmd -NoShortcut             # do not create the desktop shortcut
+install.cmd -PluginVersion 1.6.7
+install.cmd -Yes                    # never prompt
 ```
+
+The rest — `-SkipNode`, `-SkipDshCli`, `-SkipEngine`, `-SelfTest`, `-WorkDir`,
+`-PipMirror`, `-NpmRegistry`, `-NoPause` — are listed in the parameter block at
+the top of `tools/install.ps1`.
+
+Once the package reaches npm, `npx dsh-oneclick --check` and the other
+`--`-style spellings do the same thing without the download.
 
 ## Offline or mirrored install
 
@@ -62,19 +76,22 @@ The installer checks `payload/` next to itself first. Drop
 official `SHASUMS256.txt`) there and Node will not be downloaded. Everything
 else still comes from npm.
 
-## The release zip
+## The release archive
 
-For handing this to someone who would rather not touch a terminal, use the
-release archive instead: unzip it and double-click `install.cmd`. The archive
-carries the same installer plus two short guides — `GETTING-STARTED.txt` and
-`MODEL-SETUP.txt` — and it is the distribution route for file-sharing sites
-where `npx` is not an option.
+The zip is the supported distribution route: unzip it and double-click
+`install.cmd`. It carries the same installer plus three short Chinese guides —
+`GETTING-STARTED.txt`, `MODEL-SETUP.txt` and `NEXT-STEPS.txt` — and it is also
+the route for file-sharing sites and USB sticks, where `npx` is not an option.
 
-Build it with:
+Rebuild it from the repository root with:
 
 ```
-npm run build:release
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\make-release.ps1
 ```
+
+The script regenerates `sha256.txt` for exactly the files that go into the
+archive and prints the archive's own SHA-256, which is the value to publish
+alongside the download.
 
 ## After installing
 
@@ -98,23 +115,27 @@ license note.
 ## Layout
 
 ```
-bin.mjs                  npx entry point (flag translation + hand-off)
-install.cmd              double-click entry for the release zip
+install.cmd              double-click entry (the route this repository ships)
 tools/install.ps1        the installer
 tools/dsh-web.ps1        launcher behind the desktop shortcut
+tools/make-release.ps1   builds the release archive
 assets/                  icon + its provenance
+payload/                 drop the official Node zip here for an offline install
 GETTING-STARTED.txt      beginner guide (Chinese)
 MODEL-SETUP.txt          model/API-key walkthrough (Chinese)
-tools/dev/               maintainer scripts (release build, icon generator)
+NEXT-STEPS.txt           what to do right after the installer finishes (Chinese)
 COMPAT.md                contract with the kb-rag plugin (package name, profile, engine entry, flags)
+sha256.txt               hashes of every file in the release archive
+VERSION.txt              version number + maintainer change log (not shipped in the archive)
 ```
 
-The release zip ships only the subset a double-click user needs (no `bin.mjs`,
-no `tools/dev/`).
+The release archive ships only the subset a double-click user needs. The npm
+package files (`bin.mjs`, `package.json`) are not in this repository and the
+package is not on npm, so there is nothing to `npx` yet — see [Install](#install).
 
-The two beginner guides (and the installer's own comments) are written in Chinese
-because that is the audience the release zip is built for; this README and
-`bin.mjs` are English.
+The three beginner guides (and the installer's own comments) are written in
+Chinese because that is the audience the release archive is built for; this
+README is English and `README_CN.md` is Chinese.
 
 ## License
 
