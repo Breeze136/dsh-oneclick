@@ -11,6 +11,10 @@ payload/*.7z
 *.log
 *.tmp
 
+# npm pack output (dsh-oneclick-x.y.z.tgz). Build release archives with
+# `npm pack --pack-destination <dir>` so they never land in the repository root.
+*.tgz
+
 # Editor / OS noise
 .vscode/
 .idea/

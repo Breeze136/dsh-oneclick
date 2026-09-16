@@ -31,6 +31,18 @@ $RootDir   = Split-Path -Parent $ScriptDir
 # .gitignore / .gitattributes 是仓库专用文件，用户拿到 zip 不需要它们，一并排除。
 $ExcludeFiles = @('VERSION.txt', 'tools\make-release.ps1', '.gitignore', '.gitattributes')
 
+# npm 那条分发路（bin.mjs + package.json）同样不进 zip：双击用户用不到它们，而 zip 里多
+# 两个文件就会改变包内容与 sha256.txt 的条目数。一份源码、两个分发口，各装各自需要的部分：
+#   npm  -> bin.mjs + tools/  （npx 用户）
+#   zip  -> install.cmd + tools/  （双击用户）
+$ExcludeFiles += @('package.json', 'bin.mjs', 'package-lock.json')
+
+# 通配排除：归档类文件一律不进包。这里必须再来一遍，因为打包器遍历的是**文件系统**，
+# 而 .gitignore 只约束 git —— 有两个真实场景会踩中：
+#   1) npm pack 留下的 dsh-oneclick-x.y.z.tgz，会被当成随包文件打进 zip
+#   2) 为本地测试丢进 payload\ 的 node-*.zip（约 36 MB），会被整包塞进发行 zip
+$ExcludeGlobs = @('*.tgz', '*.zip', '*.tar.gz', '*.7z')
+
 function Get-Rel {
   param([string]$Base, [string]$Full)
   return $Full.Substring($Base.Length).TrimStart('\')
@@ -67,6 +79,23 @@ if (Test-Path $installPs1) {
     exit 1
   }
   Write-Host ('  [完成] 版本号一致：v' + $Version) -ForegroundColor Green
+}
+
+# package.json 是记版本号的第三处（npm 包用）。也要查：npm 的版本一旦发布就不可覆盖，
+# 版本号发错只能再发一个补丁版来遮，代价比这里多跑一次正则大得多。
+$pkgJson = Join-Path $RootDir 'package.json'
+if (Test-Path $pkgJson) {
+  $m3 = [regex]::Match((Get-Content $pkgJson -Raw -Encoding UTF8), '"version"\s*:\s*"([^"]+)"')
+  if (-not $m3.Success) {
+    Write-Host '  [失败] package.json 里找不到 "version"' -ForegroundColor Red
+    exit 1
+  }
+  if ($m3.Groups[1].Value -ne $Version) {
+    Write-Host ('  [失败] 版本号不一致：VERSION.txt = v' + $Version + '，package.json = v' + $m3.Groups[1].Value) -ForegroundColor Red
+    Write-Host '         三处（VERSION.txt / install.ps1 / package.json）必须一致后再打包或发布。' -ForegroundColor Red
+    exit 1
+  }
+  Write-Host ('  [完成] package.json 版本一致：v' + $m3.Groups[1].Value) -ForegroundColor Green
 }
 if (-not $OutDir) { $OutDir = Join-Path (Split-Path -Parent $RootDir) '发布' }
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Force -Path $OutDir | Out-Null }
@@ -110,7 +139,7 @@ if (-not $SkipCheck) {
 #（cmd.exe 按 OEM 代码页解析，带 BOM 反而出错）；.ico 等二进制跳过。
 $encBad = @()
 foreach ($f in (Get-ChildItem $RootDir -Recurse -File)) {
-  if ($f.Extension -eq '.ico') { continue }
+  if ($f.Extension -in @('.ico', '.zip', '.tgz', '.gz', '.7z', '.exe', '.png', '.jpg')) { continue }
   $rel = Get-Rel -Base $RootDir -Full $f.FullName
   $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
   $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
@@ -150,6 +179,9 @@ try {
     $rel = Get-Rel -Base $RootDir -Full $f.FullName
     if ($rel -match '(^|\\)\.git(\\|$)') { $gitSkipped++; continue }
     if ($ExcludeFiles -contains $rel) { $skipped += $rel; continue }
+    $byGlob = $false
+    foreach ($g in $ExcludeGlobs) { if ($f.Name -like $g) { $byGlob = $true; break } }
+    if ($byGlob) { $skipped += $rel; continue }
     if ($f.Name -eq 'sha256.txt') { continue }        # 稍后重新生成
     $dest = Join-Path $pkgDir $rel
     $destDir = Split-Path -Parent $dest
