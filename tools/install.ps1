@@ -89,7 +89,7 @@ $RepoUrl = 'https://github.com/Breeze136/dsh-oneclick'
 # 并且**要和 VERSION.txt 首行一致** —— tools\make-release.ps1 打包前会校验这一点，不一致就
 # 拒绝打包。为什么值得单列一行：用户手里可能同时存在解压了几次的两三个文件夹
 #（"…(1)"、"(2)"），报错时你得先问清楚"你跑的是哪个版本"。
-$PackageVersion = '1.1.1'
+$PackageVersion = '1.1.2'
 
 # 官方 CLI 与目标目录（与官方文档/官方启动方式一致）
 $DshNpmPkg   = '@deepseek-ai/dsh'
@@ -570,6 +570,21 @@ function Get-InstalledDshVersion {
   if (-not (Test-Path $pj)) { return $null }
   try { return (Get-Content $pj -Raw -Encoding UTF8 | ConvertFrom-Json).version } catch { return $null }
 }
+# pnpm 到底**能不能用**（不只是"文件在不在"）。
+# 为什么要真执行一次：pnpm 12 的 npm 包靠 preinstall/postinstall 里的 `node install.js`
+# 去下载它那个原生二进制。那条脚本失败时，磁盘上会留下一个**跑不起来的空壳**
+# （pnpm.cmd 在、执行报错或没输出），第 3 步 dsh plugin 内部 spawn('pnpm') 时才炸。
+# 2026-09-17 实测现场正是这个形态：第 2 步失败 → dsh 已就位但 pnpm 是坏的。
+function Test-PnpmWorks {
+  param([string]$NpmPrefix)
+  if (-not $NpmPrefix) { return $false }
+  $shim = Join-Path $NpmPrefix 'pnpm.cmd'
+  if (-not (Test-Path $shim)) { return $false }
+  try {
+    $v = & $shim --version 2>$null
+    return ("$v" -match '^\d+\.\d')
+  } catch { return $false }
+}
 function Get-LatestDshVersion {
   param([string]$Npm, [string]$Registry)
   return (Get-LatestNpmVersion -Npm $Npm -Package $DshNpmPkg -Registry $Registry)
@@ -691,8 +706,15 @@ function Install-DshCli {
     if ($r) { $a += @('--registry', $r) }
     if ($DryRun) { Info ('[演练] 将执行：npm ' + ($a -join ' ')); return $true }
     Info ('正在执行：npm ' + ($a -join ' '))
-    & $Npm @a 2>&1 | ForEach-Object { Write-Host ('    ' + $_) -ForegroundColor DarkGray }
+    $npmOut = & $Npm @a 2>&1
+    $npmOut | ForEach-Object { Write-Host ('    ' + $_) -ForegroundColor DarkGray }
     if ($LASTEXITCODE -eq 0) { return $true }
+    # 指名道姓：npm 报「node 不是内部或外部命令」时，用户和我们都容易以为是网络问题。
+    # 实际是包自己的安装脚本里调用裸 `node`，而那一刻 PATH 上没有 node（见第 1 步末尾
+    # 那处 PATH 前置的注释）。把这个判断写在这里，省得下次又要从几百行日志里翻。
+    if (("$npmOut" -match '不是内部或外部命令|is not recognized as an internal')) {
+      Warn '  ↑ 日志里的「node 不是内部或外部命令」= 安装脚本找不到 node，不是网络问题'
+    }
     Warn ('npm 失败（退出码 ' + $LASTEXITCODE + '），改用下一源重试')
   }
   return $false
@@ -1197,6 +1219,23 @@ if ($SkipNode) {
   }
 }
 
+# ---- 把选定的 node 前置到本进程 PATH（这一步是修 bug 加的，别删） ----
+# 便携版 Node 装在自己的目录（%LOCALAPPDATA%\DSH\node），那个目录**不在系统 PATH 上**。
+# 而 npm 执行一个包的 preinstall/postinstall 脚本时，用的是**当前进程的 PATH** ——
+# pnpm 12 的 npm 包正是靠 `node install.js` 去下载它那个原生二进制。于是 cmd 找不到 node，
+# 报「'node' 不是内部或外部命令」，整条 `npm install -g`（连 dsh 一起）退出 1，
+# 第 3 步的插件也跟着失败 —— 而网络其实是通的，用户完全看不出问题在哪。
+# 2026-09-17 实测踩到（测试机 DESKTOP-H7EG3UL：第 2 步两轮都红、第 3 步连带失败）。
+# 这里统一前置一次，后面所有 npm / node 子进程都不会再遇到；Install-Plugin 里那处
+# PATH 前置是同一件事的另一半，保留不动。
+if ($nodeExe) {
+  $nodeBinDir = Split-Path -Parent $nodeExe
+  if ($env:PATH -notlike ('*' + $nodeBinDir + '*')) {
+    $env:PATH = $nodeBinDir + ';' + $env:PATH
+    Info ('已将 Node 目录加入本进程 PATH：' + $nodeBinDir)
+  }
+}
+
 # ---------------------------------------------------------------- 2 dsh CLI
 Head '第 2 步 / 官方 DSH 命令行工具（含 web 端）'
 $npmPrefix = ''
@@ -1227,9 +1266,17 @@ if (-not $nodeExe) {
       Record 'DSH CLI' '跳过' '命令行指定 -SkipDshCli'
     } else {
       $need = $false
+      # pnpm 也算进"要不要装"的判断里。它和 dsh 是同一条 npm 命令装的，而 pnpm 12 的 npm 包
+      # 要靠 install.js 下原生二进制 —— 那条脚本失败时，dsh 往往已经写好、pnpm 却是个
+      # 跑不起来的空壳。只看 dsh 版本号就会误判成「已是最新」直接跳过，把问题推到第 3 步
+      # 才炸（那时报错是 pnpm 自己吐的，用户根本看不出根因）。2026-09-17 实测踩到。
+      $pnpmOk = Test-PnpmWorks -NpmPrefix $npmPrefix
       if (-not $installed) {
         $need = $true
         Info '本机尚未安装，将进行安装'
+      } elseif (-not $pnpmOk) {
+        $need = $true
+        Warn ('dsh 已安装（' + $installed + '），但 pnpm 缺失或不可用 —— 第 3 步装插件要靠它，本次一并装上')
       } else {
         Ok ('已安装 ' + $installed)
         if ($latest -and (Compare-Semver -Left $latest -Right $installed) -gt 0) {
@@ -1411,6 +1458,12 @@ if ($NoShortcut) {
   } else {
     Skip '未找到 Node.js，跳过'
   }
+} elseif (-not $DryRun -and -not (Get-InstalledDshVersion -NpmPrefix $npmPrefix)) {
+  # dsh CLI 没装上时**不要**建图标：建了也是死的 —— 用户双击只会在启动器窗口里看到报错，
+  # 于是问题从「安装失败」变成「图标打不开」，更难查。宁可不建，并把下一步写清楚。
+  # （2026-09-17 测试机那次：第 2 步失败，脚本仍然建了图标。）
+  Skip 'dsh CLI 未安装成功，本次不创建桌面快捷方式；第 2 步成功后重新运行本脚本即可'
+  Record '桌面快捷方式' '跳过' 'dsh CLI 未安装成功'
 } else {
   New-Shortcuts -NodeExe $nodeExe -NpmPrefix $npmPrefix
   if ($DryRun) { Record '桌面快捷方式' '将创建' 'DeepSeek Harness' }

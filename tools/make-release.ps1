@@ -28,8 +28,13 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RootDir   = Split-Path -Parent $ScriptDir
 
 # 发布包里**不该有**的（相对路径，大小写不敏感）；sha256.txt 不在其中 —— 它是重新生成的
-# .gitignore / .gitattributes 是仓库专用文件，用户拿到 zip 不需要它们，一并排除。
-$ExcludeFiles = @('VERSION.txt', 'tools\make-release.ps1', '.gitignore', '.gitattributes')
+# 排除理由分三类：
+#   1) 开发者更新记录与开发脚本：VERSION.txt、tools\make-release.ps1
+#   2) 仓库专用配置：.gitignore、.gitattributes
+#   3) npm 侧的入口：package.json、bin.mjs —— 那是给 `npx dsh-oneclick` 用的。
+#      bin.mjs 自己的注释里就写着「发布 zip 不带这个文件」：zip 用户双击 install.cmd，
+#      直接用 PowerShell 参数名，不需要 Node 这一层转发。放进 zip 只会让用户多两个看不懂的文件。
+$ExcludeFiles = @('VERSION.txt', 'tools\make-release.ps1', '.gitignore', '.gitattributes', 'bin.mjs', 'package.json')
 
 # npm 那条分发路（bin.mjs + package.json）同样不进 zip：双击用户用不到它们，而 zip 里多
 # 两个文件就会改变包内容与 sha256.txt 的条目数。一份源码、两个分发口，各装各自需要的部分：
