@@ -686,23 +686,54 @@ function Repair-Pnpm {
 # 于是日志把所有人（包括我）都往那条线上带；真正的原因可能是别的 ——
 # 例如 0xC0000135（进程缺依赖/DLL：纯净 Windows 缺 VC++ 运行库就会这样）、杀软拦截、
 # 平台包没落地……这些只有 pnpm 自己的报错能说清。先取证，再下结论。
+# Windows 的退出码负数写法（NTSTATUS）翻成常见的 0x 形式，日志里才好搜：
+# 0xC0000135 = STATUS_DLL_NOT_FOUND（进程缺依赖 —— 纯净系统缺 VC++ 运行库就是这样）
+function Format-ExitCode {
+  param([int]$Code)
+  if ($Code -ge 0) { return ("$Code") }
+  # 坑：0xFFFFFFFF 在 PowerShell 里是 Int32 的 -1（不是 UInt32），
+  # 于是 $Code -band 0xFFFFFFFF 还是负数、[uint32] 转换直接抛异常（实测踩到）。
+  # 用 64 位加回 2^32 最稳，不需要任何强制转换。
+  return ('0x' + ('{0:X8}' -f ([int64]$Code + 4294967296)))
+}
+# pnpm.exe 是原生二进制：缺 VC++ 运行库时它连启动都做不到，而 npm 那边一切正常 ——
+# 这种现象特别像"网络问题"。直接查一下那个 DLL 在不在，省得再靠猜。
+function Get-VcRuntimeHint {
+  $dll = Join-Path $env:SystemRoot 'System32\vcruntime140.dll'
+  if (Test-Path $dll) { return 'vcruntime140.dll：在' }
+  return 'vcruntime140.dll：缺失 ← pnpm.exe 会以 0xC0000135 启动失败，装一次 VC++ 运行库即可'
+}
 function Get-PnpmError {
   param([string]$NpmPrefix)
   if (-not $NpmPrefix) { return '(没取到 npm 全局目录)' }
-  $exe = Join-Path $NpmPrefix 'node_modules\pnpm\pnpm.exe'
-  $shim = Join-Path $NpmPrefix 'pnpm.cmd'
+  # 外面这层 try 是**必需的**：这是"取证"用的代码，它自己绝不能把安装流程带崩。
+  # 2026-09-21 本地测试就踩到过 —— 里面少了一个助手函数，异常被内层 catch 吞掉后
+  # 又去调另一个同样缺失的函数，最后抛到调用方，整步直接中断。
   try {
-    if (Test-Path $exe) {
-      $o = ((& $exe --version 2>&1 | Select-Object -First 3) -join ' / ').Trim()
-      return ('pnpm.exe -> ' + $o)
-    }
-    if (Test-Path $shim) {
-      $o = ((& $shim --version 2>&1 | Select-Object -First 3) -join ' / ').Trim()
-      return ('pnpm.cmd -> ' + $o)
+    $hint = ''
+    try { $hint = Get-VcRuntimeHint } catch { }
+    $cands = @(
+      @{ Name = 'pnpm.exe'; Path = (Join-Path $NpmPrefix 'node_modules\pnpm\pnpm.exe') },
+      @{ Name = 'pnpm.cmd'; Path = (Join-Path $NpmPrefix 'pnpm.cmd') }
+    )
+    foreach ($c in $cands) {
+      if (-not (Test-Path $c.Path)) { continue }
+      $cmd = $c.Path
+      $o = ''; $rc = 0; $err = ''
+      try {
+        $o = ((& $cmd --version 2>&1 | Select-Object -First 3) -join ' / ').Trim()
+        # $LASTEXITCODE 可能是 $null（命令没真正跑起来时），而 $null -ne 0 为真 —— 会被误判成失败
+        if ($null -ne $LASTEXITCODE) { $rc = [int]$LASTEXITCODE }
+      } catch { $err = $_.Exception.Message }
+      if ($rc -eq 0 -and -not $err -and $o -match '\d') {
+        return ($c.Name + ' -> "' + $o + '"（退出码 0 —— 它其实是好的）')
+      }
+      $why = $(if ($err) { '启动失败：' + $err } else { '退出码 ' + (Format-ExitCode $rc) })
+      return ($c.Name + ' ' + $why + '，输出 "' + $o + '"' + $(if ($hint) { '；' + $hint } else { '' }))
     }
     return ('pnpm.exe 与 pnpm.cmd 都不存在（' + $NpmPrefix + '）')
   } catch {
-    return ('运行 pnpm 时抛异常：' + $_.Exception.Message)
+    return ('收集 pnpm 报错时又出错：' + $_.Exception.Message + '（这条本身也是线索）')
   }
 }
 
@@ -988,6 +1019,7 @@ function Install-Plugin {
       $pnpmWhy = Get-PnpmError -NpmPrefix $NpmPrefix
       Bad ('pnpm 起不来，插件装不了（不是网络问题）：' + $pnpmWhy)
       Say '  可能是：npm 挡了它的安装脚本 / 缺 VC++ 运行库(vcruntime140.dll) / 杀软拦截'
+      Say ('  ' + (Get-VcRuntimeHint))
       Say ('  手动可试：npm config set allow-scripts=' + $NpmAllowScripts + ' --location=user 然后重跑')
       return $false
     }
@@ -1569,6 +1601,7 @@ if (-not $nodeExe) {
             $pnpmWhy = Get-PnpmError -NpmPrefix $npmPrefix
             Bad ('pnpm 装了但起不来，自动修复也没成功：' + $pnpmWhy)
             Say '  可能是：npm 挡了它的安装脚本 / 缺 VC++ 运行库(vcruntime140.dll) / 杀软拦截'
+            Say ('  ' + (Get-VcRuntimeHint))
             Say ('  手动可试：npm config set allow-scripts=' + $NpmAllowScripts + ' --location=user 然后重跑')
             Say ('            ' + (Join-Path $npmPrefix 'node_modules\pnpm\pnpm.exe') + ' --version  ← 看它自己报什么')
             Record 'DSH CLI' '失败' 'pnpm 起不来'
