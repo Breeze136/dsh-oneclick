@@ -10,7 +10,7 @@
 
     1) Node.js   —— 有就用系统自带的；没有就下官方 zip 解压到用户目录（免管理员）
     2) dsh CLI   —— npm install -g @deepseek-ai/dsh   （官方 CLI，自带 web 端）
-       pnpm      —— npm install -g pnpm               （dsh plugin 内部要转调它）
+       pnpm      —— npm install -g pnpm               （dsh plugin 内部要转调它；已能用就不再重装）
     3) 快捷方式  —— 桌面「DeepSeek Harness」双击即启动 dsh web 并打开浏览器
 
   下面两步只在装了 kb-rag 时才有意义（用户选 n 就整段跳过）：
@@ -341,13 +341,23 @@ function Clear-SpinLine {
 $script:SpinLastLen = 0
 # 等一个子进程结束，期间转圈。替代 Start-Process -Wait —— 那个只能干等，窗口一片死寂。
 # Python 静默安装要一两分钟，是脚本里最长的一段无声等待。
+# $Hint / $HintAfterSec：等了这么久之后**额外说明一句**「慢是正常的」。
+# 用在 npm 那几步上 —— 它们是全脚本最长的等待，而慢的原因（冷缓存要下几百个包、
+# 杀软逐个文件扫、机械盘）从窗口上完全看不出来，用户会以为卡死。
 function Wait-ProcessWithSpin {
-  param([System.Diagnostics.Process]$Process, [string]$What = '处理中', [int]$FrameMs = 120, [switch]$Force)
+  param([System.Diagnostics.Process]$Process, [string]$What = '处理中', [int]$FrameMs = 120, [switch]$Force,
+        [string]$Hint = '', [int]$HintAfterSec = 0)
   if (-not $Process) { return }
   $animate = Test-SpinConsole -Force:$Force
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
   $frame = 0; $nextFrame = 0.0
+  $hintShown = $false
   while (-not $Process.HasExited) {
+    if ($Hint -and -not $hintShown -and $sw.Elapsed.TotalSeconds -ge $HintAfterSec) {
+      if ($animate) { Clear-SpinLine }
+      Say $Hint
+      $hintShown = $true
+    }
     if ($animate -and $sw.Elapsed.TotalMilliseconds -ge $nextFrame) {
       Write-SpinFrame -What $What -Frame $frame -Seconds $sw.Elapsed.TotalSeconds
       $frame++
@@ -652,17 +662,126 @@ function Enable-NpmScripts {
 # 顺序很重要：第一次只靠上面的环境变量 —— 老版本 npm 没有 --allow-scripts 这个选项，
 # 一上来就加会变成「未知参数」；只有复验失败后才带 flag 重试。
 function Repair-Pnpm {
-  param([string]$Npm, [string]$NpmPrefix, [string]$Registry = '')
+  param([string]$Npm, [string]$NpmPrefix, [string]$Registry = '', [string]$NodeExe = '')
   if (-not $Npm) { return $false }
   if (Test-PnpmWorks -NpmPrefix $NpmPrefix) { return $true }
-  Warn 'pnpm 装了但用不了（新版 npm 默认不跑依赖的安装脚本）—— 带白名单重装一次'
+  Warn 'pnpm 装了但用不了 —— 带白名单重装一次，顺带把它的平台二进制重新下全'
   Enable-NpmScripts
   $a = @('install', '-g', 'pnpm@latest', '--no-fund', '--no-audit', ('--allow-scripts=' + $NpmAllowScripts))
   if ($Registry) { $a += @('--registry', $Registry) }
   if ($DryRun) { Info ('[演练] 将执行：npm ' + ($a -join ' ')); return $true }
   Info ('正在执行：npm ' + ($a -join ' '))
-  & $Npm @a 2>&1 | ForEach-Object { Write-Host ('    ' + $_) -ForegroundColor DarkGray }
-  return (Test-PnpmWorks -NpmPrefix $NpmPrefix)
+  $res = Invoke-NpmInstall -Npm $Npm -NodeExe $NodeExe -NpmArgs $a -What '重装 pnpm' `
+                           -Hint '  pnpm 的平台二进制有 44MB，慢机器上下载还要几分钟，别关窗口。' -HintAfterSec 45
+  Write-NpmOutput $res.Output
+  if ($res.Code -ne 0) { Warn ('重装 pnpm 退出码 ' + $res.Code) }
+  # pnpm.exe 是 preinstall 脚本下载/落地的大文件，杀软会让它晚几秒才可执行 —— 等一下再判定
+  $ok = Wait-For { Test-PnpmWorks -NpmPrefix $NpmPrefix } -Seconds 30 -What '等待 pnpm 可用' -PollMs 1000
+  if ($ok) { Ok ('pnpm 已修复（重装用时 ' + (Format-WaitSpan $res.Seconds) + '）') }
+  return [bool]$ok
+}
+
+# pnpm 起不来时，把**它自己的报错**抓下来打出去。
+# 教训（2026-09-20）：先前这里只打了一句我们猜的原因（"新版 npm 默认不跑依赖的安装脚本"），
+# 于是日志把所有人（包括我）都往那条线上带；真正的原因可能是别的 ——
+# 例如 0xC0000135（进程缺依赖/DLL：纯净 Windows 缺 VC++ 运行库就会这样）、杀软拦截、
+# 平台包没落地……这些只有 pnpm 自己的报错能说清。先取证，再下结论。
+function Get-PnpmError {
+  param([string]$NpmPrefix)
+  if (-not $NpmPrefix) { return '(没取到 npm 全局目录)' }
+  $exe = Join-Path $NpmPrefix 'node_modules\pnpm\pnpm.exe'
+  $shim = Join-Path $NpmPrefix 'pnpm.cmd'
+  try {
+    if (Test-Path $exe) {
+      $o = ((& $exe --version 2>&1 | Select-Object -First 3) -join ' / ').Trim()
+      return ('pnpm.exe -> ' + $o)
+    }
+    if (Test-Path $shim) {
+      $o = ((& $shim --version 2>&1 | Select-Object -First 3) -join ' / ').Trim()
+      return ('pnpm.cmd -> ' + $o)
+    }
+    return ('pnpm.exe 与 pnpm.cmd 都不存在（' + $NpmPrefix + '）')
+  } catch {
+    return ('运行 pnpm 时抛异常：' + $_.Exception.Message)
+  }
+}
+
+# ----------------------------------------------------- npm 执行器（带转圈 + 计时）
+# 2026-09-21 用户反馈："npm install -g 那一步在旧机器上两侧都要很久，全静着，不知道在干嘛"。
+# 三个原因叠在一起，这里一次性解决：
+#   1) npm 的输出一旦被管道接走就不再逐行吐出来（非 TTY），整条命令结束才拿到 —— 于是
+#      从回车到出字之间窗口完全没动静。冷缓存/杀软/机械盘上这是 3~5 分钟。
+#      所以改成：输出全部重定向进临时日志，主进程**转圈 + 报已用秒数**，跑完再决定打不打日志。
+#   2) 启动方式绕开 npm.cmd / npm.ps1 那层壳：PS 里 `Get-Command npm` 会解析到 npm.ps1，
+#      而 .ps1 交给 Start-Process 会报「不是有效的 Win32 应用程序」。node.exe + npm-cli.js
+#      是真 exe，重定向和退出码都干净（实测 npm.cmd 也行，但 node 这条更稳）。
+#   3) 日志照旧只留档、不逐行刷屏 —— Start-Transcript 会把主机输出全量记下来，
+#      npm 那次有几百行，刷进日志后用户发给我们也没法看。
+function Get-NpmLaunch {
+  param([string]$Npm, [string]$NodeExe)
+  if ($NodeExe) {
+    $cli = Join-Path (Split-Path -Parent $NodeExe) 'node_modules\npm\bin\npm-cli.js'
+    if (Test-Path $cli) { return [pscustomobject]@{ File = $NodeExe; Pre = @($cli) } }
+  }
+  if ($Npm -and ($Npm -match '\.ps1$')) {
+    return [pscustomobject]@{ File = 'powershell.exe'; Pre = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Npm) }
+  }
+  return [pscustomobject]@{ File = $Npm; Pre = @() }
+}
+# 跑一条 npm 命令，期间转圈。返回 @{ Code; Output; Seconds }。
+# Code 为 -1 表示连 npm 都没起来（调用方按失败处理）。
+function Invoke-NpmInstall {
+  param([string]$Npm, [string]$NodeExe, [string[]]$NpmArgs, [string]$What = 'npm 安装',
+        [string]$Hint = '', [int]$HintAfterSec = 60)
+  if (-not $Npm) { return [pscustomobject]@{ Code = -1; Output = '没找到 npm'; Seconds = 0 } }
+  $launch = Get-NpmLaunch -Npm $Npm -NodeExe $NodeExe
+  $log = Join-Path $env:TEMP ('dsh-oneclick-npm-' + (Get-Date -Format 'HHmmss') + '-' + $PID + '.log')
+  $errLog = $log + '.err'
+  # 参数一律加引号：Start-Process / ProcessStartInfo 都不会替我们处理带空格的路径，
+  # 而 npm-cli.js 就在 "C:\Program Files\nodejs" 下面。cmd 的元字符也顺手引起来。
+  $q = @()
+  foreach ($x in ($launch.Pre + $NpmArgs)) {
+    if ("$x" -match '[\s&^|<>()]') { $q += ('"' + "$x" + '"') } else { $q += "$x" }
+  }
+  # 为什么绕一层 cmd.exe（2026-09-21 实测踩到，别再改回去）：
+  #   * Start-Process -PassThru **不配 -Wait 时 ExitCode 永远是空的**：轮询 HasExited、
+  #     Refresh()、WaitForExit() 全都读不出来，只有 -Wait 才给退出码，可 -Wait 就没法转圈了。
+  #     读不到退出码的后果很严重 —— 装成功了也会被判成失败。
+  #   * ProcessStartInfo 自己又不提供「重定向到文件」。于是让 cmd 做重定向（写文件、不走管道，
+  #     不会像管道那样憋住子进程），退出码由 cmd 原样带回 —— 实测 cmd /c "exit 7" 拿到 7。
+  $inner = ('"' + $launch.File + '" ' + ($q -join ' ') + ' > "' + $log + '" 2> "' + $errLog + '"')
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $(if ($env:ComSpec) { $env:ComSpec } else { 'cmd.exe' })
+  $psi.Arguments = '/c "' + $inner + '"'
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+  $p = New-Object System.Diagnostics.Process
+  $p.StartInfo = $psi
+  try { [void]$p.Start() } catch {
+    return [pscustomobject]@{ Code = -1; Output = ('无法启动 npm（' + $launch.File + '）：' + $_.Exception.Message); Seconds = $sw.Elapsed.TotalSeconds }
+  }
+  Wait-ProcessWithSpin -Process $p -What $What -Hint $Hint -HintAfterSec $HintAfterSec
+  $code = $p.ExitCode
+  $out = ''
+  foreach ($f in @($log, $errLog)) {
+    if (Test-Path $f) {
+      # npm（node）输出的是 UTF-8，按 UTF8 读才不会把中文读成乱码
+      $t = Get-Content $f -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+      if ($t) { $out += $t }
+      Remove-Item $f -Force -ErrorAction SilentlyContinue
+    }
+  }
+  try { $p.Dispose() } catch { }
+  return [pscustomobject]@{ Code = $code; Output = ("$out").Trim(); Seconds = $sw.Elapsed.TotalSeconds }
+}
+# npm 的输出按行缩进打出来（只在失败时用、以及成功但用户想看的少量行）
+function Write-NpmOutput {
+  param([string]$Output)
+  if (-not $Output) { return }
+  foreach ($ln in ($Output -split "`r?`n")) {
+    if ("$ln".Trim() -ne '') { Write-Host ('    ' + $ln) -ForegroundColor DarkGray }
+  }
 }
 function Get-LatestDshVersion {
   param([string]$Npm, [string]$Registry)
@@ -775,34 +894,79 @@ function Get-LatestNpmVersion {
   return $best
 }
 function Install-DshCli {
-  param([string]$Npm, [string]$Registry)
+  param([string]$Npm, [string]$Registry, [string]$NodeExe = '')
   # 换源重试：npm 这一步是全脚本里最"一次性"的环节（几百个包，冷启动 DNS/TLS 抖一下
   # 就整步失败，而第二次运行靠 npm 缓存又能过）。失败就自动换下一个源再试一次。
+  #
+  # 2026-09-21 改成「dsh 和 pnpm 分两次装」+ 转圈计时，针对用户反馈
+  # 「npm install -g 这一步在旧机器上两侧都要很久」。三点收益：
+  #   1) pnpm 已经能用就**完全不碰它**：pnpm 12 的包每次安装都要重下 44MB 平台二进制
+  #      并跑一遍 install.js —— 旧机器上"很久"主要就是它，而它绝大多数时候本来就是好的。
+  #      真坏了后面还有 Test-PnpmWorks / Repair-Pnpm / 插件步骤前拦截三道兜底。
+  #   2) 两次分开计时，日志里直接看出是哪一侧慢，不用猜。
+  #   3) 全程有转圈和秒数，不再是一片死寂（npm 的输出被重定向后不会逐行吐出来）。
+  $npmPrefix = Get-NpmPrefix -Npm $Npm -NodeExe $NodeExe
+  $pnpmOkNow = Test-PnpmWorks -NpmPrefix $npmPrefix
   $regs = @($Registry)
   foreach ($r in $NpmRegistries) { if ($r -ne $Registry) { $regs += $r } }
-  foreach ($r in ($regs | Select-Object -Unique)) {
-    $a = @('install', '-g', ($DshNpmPkg + '@latest'), 'pnpm@latest', '--no-fund', '--no-audit')
+  $regs = @($regs | Select-Object -Unique)
+  $dshOk = $false
+  foreach ($r in $regs) {
+    $a = @('install', '-g', ($DshNpmPkg + '@latest'), '--no-fund', '--no-audit')
     if ($r) { $a += @('--registry', $r) }
     if ($DryRun) { Info ('[演练] 将执行：npm ' + ($a -join ' ')); return $true }
     Info ('正在执行：npm ' + ($a -join ' '))
     # 关键：不设这个，新版 npm 会挡掉依赖包的安装脚本，pnpm 会变成跑不起来的空壳
     Enable-NpmScripts
-    $npmOut = & $Npm @a 2>&1
-    $npmOut | ForEach-Object { Write-Host ('    ' + $_) -ForegroundColor DarkGray }
-    if ($LASTEXITCODE -eq 0) { return $true }
+    $res = Invoke-NpmInstall -Npm $Npm -NodeExe $NodeExe -NpmArgs $a -What 'npm 安装 dsh CLI' `
+             -Hint '  这一步慢是正常的：dsh 要下几百个包，杀软还会逐个文件扫描。它没死，别关窗口。' -HintAfterSec 60
+    $srcName = if ($r) { $r } else { 'npm 默认源' }
+    Ok ('npm 用时 ' + (Format-WaitSpan $res.Seconds) + '（源：' + $srcName + '）')
+    if ($res.Code -eq 0) {
+      $dshOk = $true
+      # 成功也只把末尾几行（"added N packages in Xs"）打出来；几百行全量只在失败时打
+      $tail = @($res.Output -split "`r?`n" | Where-Object { "$_".Trim() -ne '' } | Select-Object -Last 3)
+      Write-NpmOutput ($tail -join "`n")
+      break
+    }
+    Write-NpmOutput $res.Output
     # 指名道姓：npm 报「node 不是内部或外部命令」时，用户和我们都容易以为是网络问题。
     # 实际是包自己的安装脚本里调用裸 `node`，而那一刻 PATH 上没有 node（见第 1 步末尾
     # 那处 PATH 前置的注释）。把这个判断写在这里，省得下次又要从几百行日志里翻。
-    if (("$npmOut" -match '不是内部或外部命令|is not recognized as an internal')) {
+    if (("$($res.Output)" -match '不是内部或外部命令|is not recognized as an internal')) {
       Warn '  ↑ 日志里的「node 不是内部或外部命令」= 安装脚本找不到 node，不是网络问题'
     }
     # 同理：npm 挡了安装脚本时也会在这里留下痕迹，第 2 步末尾会复验 pnpm 并自动修复
-    if (("$npmOut" -match 'not yet covered by allowScripts|install-scripts')) {
+    if (("$($res.Output)" -match 'not yet covered by allowScripts|install-scripts')) {
       Warn '  ↑ npm 挡掉了依赖的安装脚本（pnpm 可能装成空壳）—— 稍后会复验并自动修复'
     }
-    Warn ('npm 失败（退出码 ' + $LASTEXITCODE + '），改用下一源重试')
+    Warn ('npm 失败（退出码 ' + $res.Code + '），改用下一源重试')
   }
-  return $false
+  if (-not $dshOk) { return $false }
+  if ($pnpmOkNow) {
+    Ok 'pnpm 本来就能用 —— 跳过它的重装（省掉 44MB 平台二进制那一段）'
+    return $true
+  }
+  foreach ($r in $regs) {
+    $a = @('install', '-g', 'pnpm@latest', '--no-fund', '--no-audit')
+    if ($r) { $a += @('--registry', $r) }
+    if ($DryRun) { Info ('[演练] 将执行：npm ' + ($a -join ' ')); return $true }
+    Info ('正在执行：npm ' + ($a -join ' '))
+    Enable-NpmScripts
+    $res = Invoke-NpmInstall -Npm $Npm -NodeExe $NodeExe -NpmArgs $a -What 'npm 安装 pnpm' `
+             -Hint '  pnpm 的平台二进制有 44MB，慢机器上下载还要几分钟，别关窗口。' -HintAfterSec 45
+    Write-NpmOutput $res.Output
+    $srcName = if ($r) { $r } else { 'npm 默认源' }
+    Ok ('npm 用时 ' + (Format-WaitSpan $res.Seconds) + '（源：' + $srcName + '）')
+    if ($res.Code -eq 0 -and (Wait-For { Test-PnpmWorks -NpmPrefix $npmPrefix } -Seconds 20 -What '等待 pnpm 可用' -PollMs 1000)) {
+      return $true
+    }
+    Warn ('npm 装 pnpm 失败（退出码 ' + $res.Code + '），改用下一源重试')
+  }
+  # pnpm 没装上不算这一步失败：dsh 本体已经就绪，调用方会用 Repair-Pnpm 再修一次，
+  # 插件步骤前还有一道拦截 —— 那里会把 pnpm 自己的报错打出来，能直接看到真正的原因。
+  Warn 'pnpm 这一步没成功，dsh 本体已就绪 —— 继续往下走，稍后会自动再修一次'
+  return $true
 }
 
 # ----------------------------------------------------------------- 插件
@@ -819,11 +983,12 @@ function Install-Plugin {
   # （"pnpm failed in profile directory …"，退出码可能是 0xC0000135）。先在这里兜一次：
   # 能修就修；修不了就明确告诉用户不是网络问题，省得换源白试两轮。
   if (-not (Test-PnpmWorks -NpmPrefix $NpmPrefix)) {
-    $npmForPnpm = Join-Path (Split-Path -Parent $NodeExe) 'npm.cmd'
-    if (-not (Repair-Pnpm -Npm $npmForPnpm -NpmPrefix $NpmPrefix -Registry $Registry)) {
-      Bad 'pnpm 不可用（新版 npm 默认不执行依赖的安装脚本）—— 插件装不了，这不是网络问题'
-      Say ('  手动执行：npm config set allow-scripts=' + $NpmAllowScripts + ' --location=user')
-      Say '  然后重新运行本脚本'
+    $npmForPnpm = Get-NpmCmd -NodeExe $NodeExe
+    if (-not (Repair-Pnpm -Npm $npmForPnpm -NpmPrefix $NpmPrefix -Registry $Registry -NodeExe $NodeExe)) {
+      $pnpmWhy = Get-PnpmError -NpmPrefix $NpmPrefix
+      Bad ('pnpm 起不来，插件装不了（不是网络问题）：' + $pnpmWhy)
+      Say '  可能是：npm 挡了它的安装脚本 / 缺 VC++ 运行库(vcruntime140.dll) / 杀软拦截'
+      Say ('  手动可试：npm config set allow-scripts=' + $NpmAllowScripts + ' --location=user 然后重跑')
       return $false
     }
   }
@@ -1341,7 +1506,7 @@ $npmPrefix = ''
 if (-not $nodeExe) {
   if ($DryRun) {
     # 演练：Node 是「上一步会装好」的东西，别报成失败
-    Info ('[演练] 将执行：npm install -g ' + $DshNpmPkg + '@latest pnpm@latest')
+    Info ('[演练] 将执行：npm install -g ' + $DshNpmPkg + '@latest（pnpm 已可用则跳过它，省 44MB）')
     Record 'DSH CLI' '将安装' 'npm install -g（演练）'
   } else {
     Bad '未找到 Node.js，跳过'
@@ -1387,7 +1552,7 @@ if (-not $nodeExe) {
         }
       }
       if ($need) {
-        if (Install-DshCli -Npm $npm -Registry $reg) {
+        if (Install-DshCli -Npm $npm -Registry $reg -NodeExe $nodeExe) {
           # 装完别只看一眼：杀软/慢盘会让刚写好的文件短暂读不到，等它出现再报成功
           $after = Wait-For { Get-InstalledDshVersion -NpmPrefix $npmPrefix } -Seconds 20 -What '等待 DSH CLI 就位'
           if (-not $after) {
@@ -1396,15 +1561,17 @@ if (-not $nodeExe) {
           } elseif (Test-PnpmWorks -NpmPrefix $npmPrefix) {
             Ok ('DSH CLI 已就绪：v' + $after)
             Record 'DSH CLI' '已安装' ('v' + $after)
-          } elseif (Repair-Pnpm -Npm $npm -NpmPrefix $npmPrefix -Registry $reg) {
+          } elseif (Repair-Pnpm -Npm $npm -NpmPrefix $npmPrefix -Registry $reg -NodeExe $nodeExe) {
             # 新版 npm 默认挡依赖的安装脚本，pnpm 会装成空壳；到这里已带白名单补装成功
             Ok ('DSH CLI 已就绪：v' + $after + '；pnpm 已自动修复')
             Record 'DSH CLI' '已安装' ('v' + $after + '（pnpm 曾不可用，已修复）')
           } else {
-            Bad 'pnpm 装上了但用不了（新版 npm 默认不执行依赖的安装脚本），自动修复也没成功'
-            Say ('  可手动执行：npm config set allow-scripts=' + $NpmAllowScripts + ' --location=user')
-            Say '  然后重新运行本脚本'
-            Record 'DSH CLI' '失败' 'pnpm 不可用'
+            $pnpmWhy = Get-PnpmError -NpmPrefix $npmPrefix
+            Bad ('pnpm 装了但起不来，自动修复也没成功：' + $pnpmWhy)
+            Say '  可能是：npm 挡了它的安装脚本 / 缺 VC++ 运行库(vcruntime140.dll) / 杀软拦截'
+            Say ('  手动可试：npm config set allow-scripts=' + $NpmAllowScripts + ' --location=user 然后重跑')
+            Say ('            ' + (Join-Path $npmPrefix 'node_modules\pnpm\pnpm.exe') + ' --version  ← 看它自己报什么')
+            Record 'DSH CLI' '失败' 'pnpm 起不来'
           }
         } else {
           Bad 'DSH CLI 安装失败（网络或 npm 源问题，可重新运行本脚本）'
