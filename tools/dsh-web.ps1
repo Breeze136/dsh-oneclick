@@ -27,8 +27,14 @@ try { [Console]::Title = 'DeepSeek Harness' } catch { }
 $Prefix  = Join-Path $env:LOCALAPPDATA 'DSH'
 $DshHome = Join-Path $env:USERPROFILE '.dsh'
 $Port    = 3080
-$LogPath = Join-Path $Prefix 'dsh-web.log'
+# 运行日志：**每次启动一个文件**（v1.1.3 起）。
+# 原来固定叫 dsh-web.log，而且启动时先 Remove-Item 再重定向覆盖 —— 后果是：
+# 用户第一次启动失败（日志里有原因）→ 再双击一次 → **证据没了**，求助时只能拿到最后一次。
+# 时间戳命名后每次都是独立证据；配合下面的保留策略，也不会无限堆积。
+# Get-UrlFromLog 读的就是本次这个文件（见 Get-NewestLog 的说明），所以抓 URL 不受影响。
+$LogPath = Join-Path $Prefix ('dsh-web-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
 $UrlPath = Join-Path $Prefix 'session-url.txt'
+$LogKeep = 10    # 最多保留几个运行日志（按修改时间倒序）
 
 function Write-Head {
   Write-Host ''
@@ -92,10 +98,34 @@ function Test-EntryUrl {
     return ($r.StatusCode -ge 200 -and $r.StatusCode -lt 400)
   } catch { return $false }
 }
-# 从服务日志里把带 token 的入口 URL 抓出来（服务每次启动都会打一行）
+# 找最近一次的运行日志。用途：服务已经在跑时（本次没有新日志），从上次的日志里抓入口 URL。
+# 排序按文件名倒序即可 —— 文件名就是 yyyyMMdd-HHmmss，字典序等于时间序，比逐个 stat 便宜。
+function Get-NewestLog {
+  $cands = @(Get-ChildItem -Path (Join-Path $Prefix 'dsh-web-*.log') -ErrorAction SilentlyContinue |
+             Sort-Object Name -Descending)
+  if ($cands.Count -gt 0) { return $cands[0].FullName }
+  return ''
+}
+# 保留最近 $LogKeep 个日志，更早的删掉（含旧的固定名 dsh-web.log，它不再产生）。
+# 不删正在写的那一个。
+function Remove-OldLogs {
+  $keep = @(Get-ChildItem -Path (Join-Path $Prefix 'dsh-web-*.log') -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending | Select-Object -First $LogKeep | ForEach-Object { $_.FullName })
+  Get-ChildItem -Path (Join-Path $Prefix 'dsh-web-*.log') -ErrorAction SilentlyContinue | ForEach-Object {
+    if ($keep -notcontains $_.FullName -and $_.FullName -ne $LogPath) {
+      Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+    }
+  }
+  # 旧版本留下的固定名日志：内容已被新日志取代，清掉避免和新行为混淆
+  Remove-Item -LiteralPath (Join-Path $Prefix 'dsh-web.log') -Force -ErrorAction SilentlyContinue
+}
+# 从某个服务日志里把带 token 的入口 URL 抓出来（服务每次启动都会打一行）
+# 不给 -Path 就查本次的日志；服务已在运行时传最近一个日志的路径（见调用处）。
 function Get-UrlFromLog {
-  if (-not (Test-Path $LogPath)) { return '' }
-  $raw = Get-Content $LogPath -Raw -ErrorAction SilentlyContinue
+  param([string]$Path = '')
+  if (-not $Path) { $Path = $LogPath }
+  if (-not (Test-Path $Path)) { return '' }
+  $raw = Get-Content $Path -Raw -ErrorAction SilentlyContinue
   if (-not $raw) { return '' }
   $m = [regex]::Match("$raw", 'http://127\.0\.0\.1:\d+/\?token=[A-Za-z0-9_\-]+')
   if ($m.Success) { return $m.Value }
@@ -146,12 +176,17 @@ Write-Host ''
 if (Test-PortUp -p $Port) {
   $url = ''
   # 依次找：上次存下来的 → 服务日志里的 → 干净 URL（浏览器里可能已经有 30 天 cookie）
+  # 注意这里用 Get-NewestLog：本次的时间戳日志是**刚建的空文件**，正在跑的那个服务的 URL
+  # 在它自己那次启动的日志里。不换成"最近一个"就会永远抓不到。
   $saved = ''
   if (Test-Path $UrlPath) { $saved = (Get-Content $UrlPath -Raw -Encoding UTF8).Trim() }
   if ($saved -and (Test-EntryUrl -u $saved)) { $url = $saved }
   if (-not $url) {
-    $fromLog = Get-UrlFromLog
-    if ($fromLog -and (Test-EntryUrl -u $fromLog)) { $url = $fromLog }
+    $newest = Get-NewestLog
+    if ($newest) {
+      $fromLog = Get-UrlFromLog -Path $newest
+      if ($fromLog -and (Test-EntryUrl -u $fromLog)) { $url = $fromLog }
+    }
   }
   if (-not $url) {
     $clean = 'http://127.0.0.1:' + $Port + '/'
@@ -179,7 +214,9 @@ $env:DSH_HOME = $DshHome
 if ($nodeExe) { $env:PATH = (Split-Path -Parent $nodeExe) + ';' + $env:PATH }
 if ($npmPrefix) { $env:PATH = $npmPrefix + ';' + $env:PATH }
 if (-not (Test-Path $Prefix)) { New-Item -ItemType Directory -Force -Path $Prefix | Out-Null }
-Remove-Item $LogPath -Force -ErrorAction SilentlyContinue
+# 不再 Remove-Item $LogPath：本次日志是新建的时间戳文件，天然不会覆盖历史。
+# （被删掉的是**更早的**日志，由保留策略处理；这样上一次启动失败的证据还在。）
+Remove-OldLogs
 Remove-Item $UrlPath -Force -ErrorAction SilentlyContinue
 
 # 3080 被别的程序 / 别的 DSH 占着、而我们又拿不到它的入口链接时，让系统分一个空闲端口，

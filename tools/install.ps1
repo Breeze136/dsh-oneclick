@@ -85,11 +85,19 @@ $UserAgent = 'DSH-Newbie-Installer/2.0'
 # 千万别指一个不存在的地址：新手点开是 404，比不引导还糟。
 $RepoUrl = 'https://github.com/Breeze136/dsh-oneclick'
 
+# 插件仓库地址。与上面的关系（v1.1.3 起）：
+#   本安装器**装的是两个项目** —— 它自己，以及可选的 kb-rag 插件。收尾引导必须按归属分开给，
+#   否则用户装完 kb-rag 遇到问题会去安装器的 issue 列表提问，而那里不是它的维护线索。
+#   失败时也按「哪一步失败」决定主推哪个：插件/Python/模型步骤失败 → 主要指向插件仓库。
+#   v1.1.1 那次把 $RepoUrl 从插件仓库改指向安装器仓库，解决的是「安装器报错涌进插件列表」；
+#   现在插件也独立成项了，两个地址都要给，并且标明各自负责什么。
+$PluginRepoUrl = 'https://github.com/Breeze136/dsh-kb-rag'
+
 # 安装包版本。VERSION.txt 不随发布包分发（打包脚本会排除它），所以版本号必须在这里也有一份，
 # 并且**要和 VERSION.txt 首行一致** —— tools\make-release.ps1 打包前会校验这一点，不一致就
 # 拒绝打包。为什么值得单列一行：用户手里可能同时存在解压了几次的两三个文件夹
 #（"…(1)"、"(2)"），报错时你得先问清楚"你跑的是哪个版本"。
-$PackageVersion = '1.1.2'
+$PackageVersion = '1.1.3'
 
 # 官方 CLI 与目标目录（与官方文档/官方启动方式一致）
 $DshNpmPkg   = '@deepseek-ai/dsh'
@@ -145,6 +153,7 @@ $DlDir   = Join-Path $WorkDir '下载缓存'
 
 $Steps = @()
 $FailCount = 0
+$script:FailureStage = ''    # 'plugin' / 'installer'；由 Record 在失败时写入，收尾时决定 Issues 归属
 $script:WantModels = $true
 $script:WantPlugin = $true   # 第 3 步会问用户要不要装 kb-rag；默认装（回车＝装）
 
@@ -175,23 +184,172 @@ function Step {
 #   - URL 单独占一行：终端里长地址经常被折行，夹在句子中间就没法复制了。
 #   - 配色分开：成功时压暗（DarkGray + Cyan），它只是句引导，不该抢报错的优先级；
 #     失败时提亮（Gray + White）—— 那时红字已经打完了，最后这屏最有用的就是这个链接。
+#   - 归属要分清（-WithPlugin）：装了 kb-rag 才提插件的 Star；失败时按 -FailureStage 决定
+#     主推哪个仓库 —— 插件/Python/模型那几步失败属于插件的问题，指到安装器仓库去问是错的分流。
 function Show-ProjectHint {
-  param([switch]$AskStar, [string]$LogPath = '')
+  param(
+    [switch]$AskStar,
+    [string]$LogPath = '',
+    [switch]$WithPlugin,
+    [ValidateSet('', 'installer', 'plugin')][string]$FailureStage = ''
+  )
   if ($AskStar) {
     Write-Host ''
-    Write-Host '  本项目为免费开源项目。如果对你有帮助，欢迎在 GitHub 上点一个 Star（无需注册）：' -ForegroundColor DarkGray
+    Write-Host '  本安装器是免费开源项目。如果对你有帮助，欢迎在 GitHub 上点一个 Star（无需注册）：' -ForegroundColor DarkGray
     Write-Host ('    ' + $RepoUrl) -ForegroundColor Cyan
+    if ($WithPlugin) {
+      Write-Host '  kb-rag 知识库插件是同一个作者的另一个开源项目，也欢迎 Star：' -ForegroundColor DarkGray
+      Write-Host ('    ' + $PluginRepoUrl) -ForegroundColor Cyan
+    }
     Write-Host ''
-    Write-Host '  安装过程中遇到问题，或有功能建议，可在此反馈：' -ForegroundColor DarkGray
-    Write-Host ('    ' + $RepoUrl + '/issues') -ForegroundColor Cyan
+    Write-Host '  遇到问题或有功能建议，按问题出在哪一块到对应仓库反馈：' -ForegroundColor DarkGray
+    Write-Host ('    安装器（Node / DSH / 桌面图标）  ' + $RepoUrl + '/issues') -ForegroundColor Cyan
+    if ($WithPlugin) {
+      Write-Host ('    kb-rag 插件（入库 / 检索 / 模型）  ' + $PluginRepoUrl + '/issues') -ForegroundColor Cyan
+    }
     return
+  }
+
+  # 失败路径：先按失败阶段决定主推仓库
+  $primary = $RepoUrl
+  $primaryWhat = '安装器'
+  if ($FailureStage -eq 'plugin') {
+    $primary = $PluginRepoUrl
+    $primaryWhat = 'kb-rag 插件'
   }
   Write-Host ''
   Write-Host '  如遇安装失败，请携带以下两项信息在此提问：' -ForegroundColor Gray
   Write-Host '    ① 窗口中红色的 [失败] 行   ② 下方日志文件' -ForegroundColor Gray
-  Write-Host ('    ' + $RepoUrl + '/issues') -ForegroundColor White
+  Write-Host ('    ' + $primary + '/issues') -ForegroundColor White
+  Write-Host ('    （上面这次失败出在「' + $primaryWhat + '」那一步；如果判断错了，另一个仓库在这里：）') -ForegroundColor DarkGray
+  $other = if ($primary -eq $RepoUrl) { $PluginRepoUrl } else { $RepoUrl }
+  Write-Host ('    ' + $other + '/issues') -ForegroundColor DarkGray
   if ($LogPath) { Write-Host ('    ' + $LogPath) -ForegroundColor Gray }
 }
+
+# ------------------------------------------------------------------ 报错一键发送
+# 设计目标（v1.1.3）：把「用户要自己开浏览器、注册、复制、粘贴」压缩到**一次点击**。
+# 做法：从本次安装日志里取出关键行 -> **脱敏** -> 打印将发送的内容 -> 复制到剪贴板
+#       -> 打开预填好标题与正文的 issue 页面，用户只需粘贴 + 提交。
+#
+# 为什么必须先脱敏：
+#   安装日志里必然含用户的绝对路径与用户名（C:\Users\<真名>\...）、可能含 token /
+#   API key / 会话 id。这些是**收日志这个动作本身**最容易造成的事故面，
+#   而 wiki/AGENTS 的发布约定也要求示例与对外文本里不出现个人信息。
+#   所以这里做两道：① 逐条正则替换；② 把脱敏后的内容**打印给用户看**再发送（可见即可审计）。
+#
+# 为什么不是「静默上传到服务器」：那需要一个后端，而且用户看不到发了什么。
+#   一次点击 + 可见内容 + 走公开 issue，是零后端下最可审计的方案。
+function Get-RedactedReport {
+  param([string]$Path, [int]$FailLineMax = 40, [int]$TailMax = 60)
+  if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return '' }
+  $lines = @(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue)
+  if ($lines.Count -eq 0) { return '' }
+
+  # ① 红色 [失败] 行（最要紧的），② 日志尾部（给出上下文）
+  $failLines = @($lines | Where-Object { $_ -match '\[失败\]' } | Select-Object -First $FailLineMax)
+  $tail = @($lines | Select-Object -Last $TailMax)
+
+  $body = @()
+  $body += '【失败行】'
+  if ($failLines.Count) { $body += $failLines } else { $body += '(日志里没有 [失败] 行)' }
+  $body += ''
+  $body += ('【日志尾部 最后 ' + $tail.Count + ' 行】')
+  $body += $tail
+  $text = ($body -join "`r`n")
+
+  # ---- 脱敏 ----
+  $before = $text
+  # 用户名与主目录：C:\Users\<name>\... / /Users/<name>/... / /home/<name>/...
+  $text = $text -replace '(?i)([A-Z]:\\Users\\)[^\\\s"'']+', '$1<user>'
+  $text = $text -replace '(?i)(/Users/)[^/\s"'']+', '$1<user>'
+  $text = $text -replace '(?i)(/home/)[^/\s"'']+', '$1<user>'
+  # 邮箱
+  $text = $text -replace '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', '<email>'
+  # API key / token（sk- 开头的密钥、?token= 后面的值、Bearer 串）
+  $text = $text -replace '(?i)\bsk-[A-Za-z0-9_\-]{8,}', 'sk-<redacted>'
+  $text = $text -replace '(?i)([?&]token=)[A-Za-z0-9_\-]+', '$1<redacted>'
+  $text = $text -replace '(?i)(Bearer\s+)[A-Za-z0-9._\-]+', '$1<redacted>'
+  # 常见的凭据赋值：password / secret / api_key = xxx
+  $text = $text -replace '(?i)\b(password|passwd|secret|api[_-]?key|token)\s*[:=]\s*\S+', '$1=<redacted>'
+  # GitHub PAT
+  $text = $text -replace '\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}', '<github-token>'
+  # 会话 id（uuid 形态）——留着无用，且能关联到个人会话
+  $text = $text -replace '(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b', '<id>'
+  $redactedCount = 0
+  if ($text -ne $before) { $redactedCount = 1 }
+  return [pscustomobject]@{ Text = $text; Redacted = [bool]$redactedCount; TotalLines = $lines.Count }
+}
+
+function Send-ErrorReport {
+  param([string]$Path, [string]$Version = '', [string]$RepoUrl = '')
+  if (-not $Path -or -not (Test-Path -LiteralPath $Path)) {
+    Warn '找不到本次安装日志，无法生成报错信息。'
+    return
+  }
+  $r = Get-RedactedReport -Path $Path
+  if (-not $r -or -not $r.Text) { Warn '日志为空，无法生成报错信息。'; return }
+
+  Write-Host ''
+  Write-Host '  ────────────────────────────────────────────────────' -ForegroundColor DarkGray
+  Write-Host '  下面这些内容将被发送（已自动隐藏用户名、密钥、会话 id 等）：' -ForegroundColor White
+  Write-Host '  ────────────────────────────────────────────────────' -ForegroundColor DarkGray
+  # 只展示前若干行，避免刷屏；完整内容仍会进剪贴板
+  $preview = ($r.Text -split "`r`n" | Select-Object -First 30) -join "`r`n"
+  Write-Host $preview -ForegroundColor DarkGray
+  if (($r.Text -split "`r`n").Count -gt 30) {
+    Write-Host ('  …（完整内容共 ' + ($r.Text -split "`r`n").Count + ' 行，已全部复制到剪贴板）') -ForegroundColor DarkGray
+  }
+  if ($r.Redacted) { Write-Host '  （检测到并已隐藏敏感信息）' -ForegroundColor DarkGray }
+  Write-Host ''
+
+  # 标题：版本 + 失败的条目（便于维护者一眼分类）
+  $failNames = @(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue |
+                 Where-Object { $_ -match '\[失败\]' } |
+                 ForEach-Object { ($_ -replace '.*\[失败\]\s*', '').Trim() } |
+                 Select-Object -First 3)
+  $titleTail = if ($failNames.Count) { ($failNames -join ' / ') } else { '安装失败' }
+  $title = ('[安装失败] v' + $Version + ' — ' + $titleTail)
+  if ($title.Length -gt 120) { $title = $title.Substring(0, 120) }
+
+  $bodyText = @()
+  $bodyText += '> 由安装器的「一键发送报错」生成（已自动脱敏）。请在提交前再扫一眼，确认没有你不希望公开的内容。'
+  $bodyText += ''
+  $bodyText += ('- 安装器版本：v' + $Version)
+  $bodyText += ('- Windows：' + [System.Environment]::OSVersion.Version.ToString())
+  $bodyText += ('- PowerShell：' + $PSVersionTable.PSVersion.ToString())
+  $bodyText += ''
+  $bodyText += '```'
+  $bodyText += $r.Text
+  $bodyText += '```'
+  $body = ($bodyText -join "`r`n")
+
+  # 复制到剪贴板（失败也不致命 —— 内容已经打印在上面，用户可手动选中）
+  $copied = $false
+  try { Set-Clipboard -Value $body -ErrorAction Stop; $copied = $true } catch { }
+
+  # 预填 issue 页：标题 + 正文都带上，用户只需粘贴正文（GitHub 对超长 URL 会截断，
+  # 所以正文以剪贴板为主、URL 里只带标题，避免"打开后正文缺一半"）
+  $url = $RepoUrl + '/issues/new?title=' + [uri]::EscapeDataString($title)
+  Write-Host '  正在打开报错提交页面（正文已复制到剪贴板，粘贴即可）：' -ForegroundColor Gray
+  Write-Host ('    ' + $url) -ForegroundColor Cyan
+
+  $opened = $false
+  try { Start-Process $url -ErrorAction Stop; $opened = $true } catch { }
+  if (-not $opened) { try { & cmd.exe /c ('start "" "' + $url + '"') 2>$null; $opened = $true } catch { } }
+
+  Write-Host ''
+  if ($copied) {
+    Write-Host '  [完成] 已复制到剪贴板：在打开的页面里粘贴到正文框，点「Submit new issue」即可。' -ForegroundColor Green
+  } else {
+    Write-Host '  [注意] 剪贴板不可用。请手动选中上面打印的内容复制，或直接附上日志文件。' -ForegroundColor Yellow
+  }
+  if (-not $opened) {
+    Write-Host '  [注意] 浏览器没有自动打开。请手动访问上面的地址。' -ForegroundColor Yellow
+  }
+  Write-Host '  （提交需要 GitHub 账号；没有账号也可以把内容贴到任意论坛/群里问）' -ForegroundColor DarkGray
+}
+
 function Pad-Display {
   param([string]$Text, [int]$Width)
   # 中文是双宽字符，PadRight 按字符数补空格会错位，这里按显示宽度补。
@@ -225,7 +383,18 @@ function Ask-YesNo {
 function Record {
   param([string]$Name, [string]$State, [string]$Detail = '')
   $script:Steps += [pscustomobject]@{ 项目 = $Name; 结果 = $State; 说明 = $Detail }
-  if ($State -eq '失败') { $script:FailCount = $script:FailCount + 1 }
+  if ($State -eq '失败') {
+    $script:FailCount = $script:FailCount + 1
+    # 记下「最后一次失败属于谁」——收尾时据此决定主推哪个仓库的 Issues。
+    # 用项目名判定而不是解析步骤标题：标题文案会改，项目名是记账的键。
+    # kb-rag 插件本身、它的 Python 依赖、检索模型，都属于插件那边的问题；
+    # Node / DSH CLI / 桌面快捷方式属于安装器这边。
+    if ($Name -match 'kb-rag|插件|Python|引擎|模型') {
+      $script:FailureStage = 'plugin'
+    } else {
+      $script:FailureStage = 'installer'
+    }
+  }
 }
 # 等某个检查变成真，超时才放弃。
 # 为什么要这个：装完立刻验证一次容易误判 —— 杀软实时扫描、慢盘、写缓存都会让
@@ -1516,11 +1685,27 @@ if ($FailCount -eq 0 -and -not $DryRun) {
   Say '以上步骤的详细说明见同目录文件：'
   Say ('   ' + (Join-Path $RootDir 'NEXT-STEPS.txt'))
   Say '   （和 GETTING-STARTED.txt、MODEL-SETUP.txt 放在一起）'
-  # 装成功了才求 Star；Issues 两种情况下都给
-  Show-ProjectHint -AskStar
+  # 装成功了才求 Star；装了 kb-rag 才一并提插件的 Star（-WithPlugin）
+  Show-ProjectHint -AskStar -WithPlugin:([bool](Get-InstalledPlugin))
 } elseif (-not $DryRun -and $FailCount -gt 0) {
-  # 失败时只给 Issues，并把日志路径一起给它 —— 这时用户最需要的是「拿什么去哪问」
-  Show-ProjectHint -LogPath $logFile
+  # 失败时只给 Issues，并把日志路径一起给它 —— 这时用户最需要的是「拿什么去哪问」。
+  # 归属按失败步骤判断：插件/Python/模型那几步失败属于插件的问题（见 Record 的判定处）。
+  Show-ProjectHint -LogPath $logFile -FailureStage $FailureStage
+
+  # 一键发送报错：能自动做的都做掉，用户只需在浏览器里粘贴 + 提交。
+  # 默认不发送（问一句），而且发送前会把**脱敏后的全文**打印出来给用户过目。
+  # $Yes（-Yes）是"全部用默认答案"，默认答案＝不问也不发 —— 无人值守时不该往公开 issue 发东西。
+  if (-not $Yes) {
+    try {
+      $ans = Read-Host '  是否现在把报错信息整理好并打开提交页面？（y/N，内容会先显示给你确认）'
+    } catch { $ans = 'n' }
+    if ("$ans" -match '^(y|Y|yes|YES)$') {
+      $target = if ($FailureStage -eq 'plugin') { $PluginRepoUrl } else { $RepoUrl }
+      Send-ErrorReport -Path $logFile -Version $PackageVersion -RepoUrl $target
+    } else {
+      Say '已跳过。上面的日志文件里就是全部信息，需要时可直接附上它提问。'
+    }
+  }
 }
 
 if ($FailCount -gt 0 -and -not $DryRun) {
