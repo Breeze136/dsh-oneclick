@@ -227,129 +227,6 @@ function Show-ProjectHint {
   if ($LogPath) { Write-Host ('    ' + $LogPath) -ForegroundColor Gray }
 }
 
-# ------------------------------------------------------------------ 报错一键发送
-# 设计目标（v1.1.3）：把「用户要自己开浏览器、注册、复制、粘贴」压缩到**一次点击**。
-# 做法：从本次安装日志里取出关键行 -> **脱敏** -> 打印将发送的内容 -> 复制到剪贴板
-#       -> 打开预填好标题与正文的 issue 页面，用户只需粘贴 + 提交。
-#
-# 为什么必须先脱敏：
-#   安装日志里必然含用户的绝对路径与用户名（C:\Users\<真名>\...）、可能含 token /
-#   API key / 会话 id。这些是**收日志这个动作本身**最容易造成的事故面，
-#   而 wiki/AGENTS 的发布约定也要求示例与对外文本里不出现个人信息。
-#   所以这里做两道：① 逐条正则替换；② 把脱敏后的内容**打印给用户看**再发送（可见即可审计）。
-#
-# 为什么不是「静默上传到服务器」：那需要一个后端，而且用户看不到发了什么。
-#   一次点击 + 可见内容 + 走公开 issue，是零后端下最可审计的方案。
-function Get-RedactedReport {
-  param([string]$Path, [int]$FailLineMax = 40, [int]$TailMax = 60)
-  if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return '' }
-  $lines = @(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue)
-  if ($lines.Count -eq 0) { return '' }
-
-  # ① 红色 [失败] 行（最要紧的），② 日志尾部（给出上下文）
-  $failLines = @($lines | Where-Object { $_ -match '\[失败\]' } | Select-Object -First $FailLineMax)
-  $tail = @($lines | Select-Object -Last $TailMax)
-
-  $body = @()
-  $body += '【失败行】'
-  if ($failLines.Count) { $body += $failLines } else { $body += '(日志里没有 [失败] 行)' }
-  $body += ''
-  $body += ('【日志尾部 最后 ' + $tail.Count + ' 行】')
-  $body += $tail
-  $text = ($body -join "`r`n")
-
-  # ---- 脱敏 ----
-  $before = $text
-  # 用户名与主目录：C:\Users\<name>\... / /Users/<name>/... / /home/<name>/...
-  $text = $text -replace '(?i)([A-Z]:\\Users\\)[^\\\s"'']+', '$1<user>'
-  $text = $text -replace '(?i)(/Users/)[^/\s"'']+', '$1<user>'
-  $text = $text -replace '(?i)(/home/)[^/\s"'']+', '$1<user>'
-  # 邮箱
-  $text = $text -replace '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', '<email>'
-  # API key / token（sk- 开头的密钥、?token= 后面的值、Bearer 串）
-  $text = $text -replace '(?i)\bsk-[A-Za-z0-9_\-]{8,}', 'sk-<redacted>'
-  $text = $text -replace '(?i)([?&]token=)[A-Za-z0-9_\-]+', '$1<redacted>'
-  $text = $text -replace '(?i)(Bearer\s+)[A-Za-z0-9._\-]+', '$1<redacted>'
-  # 常见的凭据赋值：password / secret / api_key = xxx
-  $text = $text -replace '(?i)\b(password|passwd|secret|api[_-]?key|token)\s*[:=]\s*\S+', '$1=<redacted>'
-  # GitHub PAT
-  $text = $text -replace '\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}', '<github-token>'
-  # 会话 id（uuid 形态）——留着无用，且能关联到个人会话
-  $text = $text -replace '(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b', '<id>'
-  $redactedCount = 0
-  if ($text -ne $before) { $redactedCount = 1 }
-  return [pscustomobject]@{ Text = $text; Redacted = [bool]$redactedCount; TotalLines = $lines.Count }
-}
-
-function Send-ErrorReport {
-  param([string]$Path, [string]$Version = '', [string]$RepoUrl = '')
-  if (-not $Path -or -not (Test-Path -LiteralPath $Path)) {
-    Warn '找不到本次安装日志，无法生成报错信息。'
-    return
-  }
-  $r = Get-RedactedReport -Path $Path
-  if (-not $r -or -not $r.Text) { Warn '日志为空，无法生成报错信息。'; return }
-
-  Write-Host ''
-  Write-Host '  ────────────────────────────────────────────────────' -ForegroundColor DarkGray
-  Write-Host '  下面这些内容将被发送（已自动隐藏用户名、密钥、会话 id 等）：' -ForegroundColor White
-  Write-Host '  ────────────────────────────────────────────────────' -ForegroundColor DarkGray
-  # 只展示前若干行，避免刷屏；完整内容仍会进剪贴板
-  $preview = ($r.Text -split "`r`n" | Select-Object -First 30) -join "`r`n"
-  Write-Host $preview -ForegroundColor DarkGray
-  if (($r.Text -split "`r`n").Count -gt 30) {
-    Write-Host ('  …（完整内容共 ' + ($r.Text -split "`r`n").Count + ' 行，已全部复制到剪贴板）') -ForegroundColor DarkGray
-  }
-  if ($r.Redacted) { Write-Host '  （检测到并已隐藏敏感信息）' -ForegroundColor DarkGray }
-  Write-Host ''
-
-  # 标题：版本 + 失败的条目（便于维护者一眼分类）
-  $failNames = @(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue |
-                 Where-Object { $_ -match '\[失败\]' } |
-                 ForEach-Object { ($_ -replace '.*\[失败\]\s*', '').Trim() } |
-                 Select-Object -First 3)
-  $titleTail = if ($failNames.Count) { ($failNames -join ' / ') } else { '安装失败' }
-  $title = ('[安装失败] v' + $Version + ' — ' + $titleTail)
-  if ($title.Length -gt 120) { $title = $title.Substring(0, 120) }
-
-  $bodyText = @()
-  $bodyText += '> 由安装器的「一键发送报错」生成（已自动脱敏）。请在提交前再扫一眼，确认没有你不希望公开的内容。'
-  $bodyText += ''
-  $bodyText += ('- 安装器版本：v' + $Version)
-  $bodyText += ('- Windows：' + [System.Environment]::OSVersion.Version.ToString())
-  $bodyText += ('- PowerShell：' + $PSVersionTable.PSVersion.ToString())
-  $bodyText += ''
-  $bodyText += '```'
-  $bodyText += $r.Text
-  $bodyText += '```'
-  $body = ($bodyText -join "`r`n")
-
-  # 复制到剪贴板（失败也不致命 —— 内容已经打印在上面，用户可手动选中）
-  $copied = $false
-  try { Set-Clipboard -Value $body -ErrorAction Stop; $copied = $true } catch { }
-
-  # 预填 issue 页：标题 + 正文都带上，用户只需粘贴正文（GitHub 对超长 URL 会截断，
-  # 所以正文以剪贴板为主、URL 里只带标题，避免"打开后正文缺一半"）
-  $url = $RepoUrl + '/issues/new?title=' + [uri]::EscapeDataString($title)
-  Write-Host '  正在打开报错提交页面（正文已复制到剪贴板，粘贴即可）：' -ForegroundColor Gray
-  Write-Host ('    ' + $url) -ForegroundColor Cyan
-
-  $opened = $false
-  try { Start-Process $url -ErrorAction Stop; $opened = $true } catch { }
-  if (-not $opened) { try { & cmd.exe /c ('start "" "' + $url + '"') 2>$null; $opened = $true } catch { } }
-
-  Write-Host ''
-  if ($copied) {
-    Write-Host '  [完成] 已复制到剪贴板：在打开的页面里粘贴到正文框，点「Submit new issue」即可。' -ForegroundColor Green
-  } else {
-    Write-Host '  [注意] 剪贴板不可用。请手动选中上面打印的内容复制，或直接附上日志文件。' -ForegroundColor Yellow
-  }
-  if (-not $opened) {
-    Write-Host '  [注意] 浏览器没有自动打开。请手动访问上面的地址。' -ForegroundColor Yellow
-  }
-  Write-Host '  （提交需要 GitHub 账号；没有账号也可以把内容贴到任意论坛/群里问）' -ForegroundColor DarkGray
-}
-
 function Pad-Display {
   param([string]$Text, [int]$Width)
   # 中文是双宽字符，PadRight 按字符数补空格会错位，这里按显示宽度补。
@@ -754,6 +631,39 @@ function Test-PnpmWorks {
     return ("$v" -match '^\d+\.\d')
   } catch { return $false }
 }
+
+# 新版 npm（11.x 起）默认**不执行**依赖包的 install 脚本，直到包名进入 allowScripts 白名单。
+# 后果（2026-09-20 从三份全新安装日志定位）：
+#   * pnpm 靠自己的 install.js 去准备平台二进制 —— 脚本没跑，pnpm 装上也只是个空壳
+#     （Test-PnpmWorks 判 false），第 3 步 dsh plugin 内部 spawn('pnpm') 时以
+#     0xC0000135（STATUS_DLL_NOT_FOUND，进程缺依赖）退出 —— 看起来却像网络问题
+#   * koffi / node-pty / @deepseek-ai/dsh-subprocess-local 是 DSH 自己的原生件，同样要脚本
+# 名单照抄 npm 自己在警告里给的顺序，便于将来核对。
+$NpmAllowScripts = 'pnpm,@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs'
+
+# 让本次进程内的 npm / pnpm 调用都带白名单。走 npm_config_* 环境变量是"只在本次生效"：
+# 不写用户的 .npmrc（实测 npm 11.17 能读到该变量，且 .npmrc 保持原样）。
+# 老版本 npm 不认识这个键，会直接忽略 —— 跨版本安全。
+function Enable-NpmScripts {
+  $env:npm_config_allow_scripts = $NpmAllowScripts
+}
+
+# 装完 pnpm 必须复验；不可用就带白名单再装一次。
+# 顺序很重要：第一次只靠上面的环境变量 —— 老版本 npm 没有 --allow-scripts 这个选项，
+# 一上来就加会变成「未知参数」；只有复验失败后才带 flag 重试。
+function Repair-Pnpm {
+  param([string]$Npm, [string]$NpmPrefix, [string]$Registry = '')
+  if (-not $Npm) { return $false }
+  if (Test-PnpmWorks -NpmPrefix $NpmPrefix) { return $true }
+  Warn 'pnpm 装了但用不了（新版 npm 默认不跑依赖的安装脚本）—— 带白名单重装一次'
+  Enable-NpmScripts
+  $a = @('install', '-g', 'pnpm@latest', '--no-fund', '--no-audit', ('--allow-scripts=' + $NpmAllowScripts))
+  if ($Registry) { $a += @('--registry', $Registry) }
+  if ($DryRun) { Info ('[演练] 将执行：npm ' + ($a -join ' ')); return $true }
+  Info ('正在执行：npm ' + ($a -join ' '))
+  & $Npm @a 2>&1 | ForEach-Object { Write-Host ('    ' + $_) -ForegroundColor DarkGray }
+  return (Test-PnpmWorks -NpmPrefix $NpmPrefix)
+}
 function Get-LatestDshVersion {
   param([string]$Npm, [string]$Registry)
   return (Get-LatestNpmVersion -Npm $Npm -Package $DshNpmPkg -Registry $Registry)
@@ -875,6 +785,8 @@ function Install-DshCli {
     if ($r) { $a += @('--registry', $r) }
     if ($DryRun) { Info ('[演练] 将执行：npm ' + ($a -join ' ')); return $true }
     Info ('正在执行：npm ' + ($a -join ' '))
+    # 关键：不设这个，新版 npm 会挡掉依赖包的安装脚本，pnpm 会变成跑不起来的空壳
+    Enable-NpmScripts
     $npmOut = & $Npm @a 2>&1
     $npmOut | ForEach-Object { Write-Host ('    ' + $_) -ForegroundColor DarkGray }
     if ($LASTEXITCODE -eq 0) { return $true }
@@ -883,6 +795,10 @@ function Install-DshCli {
     # 那处 PATH 前置的注释）。把这个判断写在这里，省得下次又要从几百行日志里翻。
     if (("$npmOut" -match '不是内部或外部命令|is not recognized as an internal')) {
       Warn '  ↑ 日志里的「node 不是内部或外部命令」= 安装脚本找不到 node，不是网络问题'
+    }
+    # 同理：npm 挡了安装脚本时也会在这里留下痕迹，第 2 步末尾会复验 pnpm 并自动修复
+    if (("$npmOut" -match 'not yet covered by allowScripts|install-scripts')) {
+      Warn '  ↑ npm 挡掉了依赖的安装脚本（pnpm 可能装成空壳）—— 稍后会复验并自动修复'
     }
     Warn ('npm 失败（退出码 ' + $LASTEXITCODE + '），改用下一源重试')
   }
@@ -899,6 +815,18 @@ function Install-Plugin {
   param([string]$NodeExe, [string]$NpmPrefix, [string]$Registry, [string]$Version = '')
   $binJs = Join-Path $NpmPrefix 'node_modules\@deepseek-ai\dsh\lib\bin.js'
   if (-not (Test-Path $binJs)) { Bad ('未找到 dsh CLI：' + $binJs); return $false }
+  # pnpm 不可用时 dsh plugin 必然失败（它内部 spawn('pnpm')），而吐出来的信息长得像网络问题
+  # （"pnpm failed in profile directory …"，退出码可能是 0xC0000135）。先在这里兜一次：
+  # 能修就修；修不了就明确告诉用户不是网络问题，省得换源白试两轮。
+  if (-not (Test-PnpmWorks -NpmPrefix $NpmPrefix)) {
+    $npmForPnpm = Join-Path (Split-Path -Parent $NodeExe) 'npm.cmd'
+    if (-not (Repair-Pnpm -Npm $npmForPnpm -NpmPrefix $NpmPrefix -Registry $Registry)) {
+      Bad 'pnpm 不可用（新版 npm 默认不执行依赖的安装脚本）—— 插件装不了，这不是网络问题'
+      Say ('  手动执行：npm config set allow-scripts=' + $NpmAllowScripts + ' --location=user')
+      Say '  然后重新运行本脚本'
+      return $false
+    }
+  }
   if (-not (Test-Path $DshHome)) {
     if ($DryRun) { Info ('[演练] 将创建 ' + $DshHome) }
     else { New-Item -ItemType Directory -Force -Path $DshHome | Out-Null }
@@ -915,6 +843,8 @@ function Install-Plugin {
     $env:DSH_HOME = $DshHome
     # dsh plugin 内部会 spawn('pnpm', ...)，所以全局 npm 目录必须在 PATH 上
     $env:PATH = $NpmPrefix + ';' + (Split-Path -Parent $NodeExe) + ';' + $env:PATH
+    # pnpm 自己也要读 npm 配置：插件依赖里若有需要构建的包，同样吃白名单这一套
+    Enable-NpmScripts
     foreach ($r in ($regs | Select-Object -Unique)) {
       if ($r) { $env:npm_config_registry = $r } else { Remove-Item Env:\npm_config_registry -ErrorAction SilentlyContinue }
       if ($DryRun) {
@@ -1463,9 +1393,18 @@ if (-not $nodeExe) {
           if (-not $after) {
             Bad 'npm 报告安装完成，但全局目录中读不到 dsh 的版本号（可能被安全软件拦截）'
             Record 'DSH CLI' '失败' '安装后验证失败'
-          } else {
+          } elseif (Test-PnpmWorks -NpmPrefix $npmPrefix) {
             Ok ('DSH CLI 已就绪：v' + $after)
             Record 'DSH CLI' '已安装' ('v' + $after)
+          } elseif (Repair-Pnpm -Npm $npm -NpmPrefix $npmPrefix -Registry $reg) {
+            # 新版 npm 默认挡依赖的安装脚本，pnpm 会装成空壳；到这里已带白名单补装成功
+            Ok ('DSH CLI 已就绪：v' + $after + '；pnpm 已自动修复')
+            Record 'DSH CLI' '已安装' ('v' + $after + '（pnpm 曾不可用，已修复）')
+          } else {
+            Bad 'pnpm 装上了但用不了（新版 npm 默认不执行依赖的安装脚本），自动修复也没成功'
+            Say ('  可手动执行：npm config set allow-scripts=' + $NpmAllowScripts + ' --location=user')
+            Say '  然后重新运行本脚本'
+            Record 'DSH CLI' '失败' 'pnpm 不可用'
           }
         } else {
           Bad 'DSH CLI 安装失败（网络或 npm 源问题，可重新运行本脚本）'
@@ -1688,24 +1627,11 @@ if ($FailCount -eq 0 -and -not $DryRun) {
   # 装成功了才求 Star；装了 kb-rag 才一并提插件的 Star（-WithPlugin）
   Show-ProjectHint -AskStar -WithPlugin:([bool](Get-InstalledPlugin))
 } elseif (-not $DryRun -and $FailCount -gt 0) {
-  # 失败时只给 Issues，并把日志路径一起给它 —— 这时用户最需要的是「拿什么去哪问」。
+  # 失败时给出 Issues 与日志路径 —— 这时用户最需要的是「拿什么去哪问」。
   # 归属按失败步骤判断：插件/Python/模型那几步失败属于插件的问题（见 Record 的判定处）。
+  # v1.1.4 起不再提供「一键发送报错」（自动脱敏 + 剪贴板 + 预填 issue 页面）：
+  # 安装器不替用户往公开仓库发东西，只把该看的（失败行）和该带的（日志路径）指出来。
   Show-ProjectHint -LogPath $logFile -FailureStage $FailureStage
-
-  # 一键发送报错：能自动做的都做掉，用户只需在浏览器里粘贴 + 提交。
-  # 默认不发送（问一句），而且发送前会把**脱敏后的全文**打印出来给用户过目。
-  # $Yes（-Yes）是"全部用默认答案"，默认答案＝不问也不发 —— 无人值守时不该往公开 issue 发东西。
-  if (-not $Yes) {
-    try {
-      $ans = Read-Host '  是否现在把报错信息整理好并打开提交页面？（y/N，内容会先显示给你确认）'
-    } catch { $ans = 'n' }
-    if ("$ans" -match '^(y|Y|yes|YES)$') {
-      $target = if ($FailureStage -eq 'plugin') { $PluginRepoUrl } else { $RepoUrl }
-      Send-ErrorReport -Path $logFile -Version $PackageVersion -RepoUrl $target
-    } else {
-      Say '已跳过。上面的日志文件里就是全部信息，需要时可直接附上它提问。'
-    }
-  }
 }
 
 if ($FailCount -gt 0 -and -not $DryRun) {
