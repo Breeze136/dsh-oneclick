@@ -195,7 +195,7 @@ function Show-ProjectHint {
   )
   if ($AskStar) {
     Write-Host ''
-    Write-Host '  本安装器是免费开源项目。如果对你有帮助，欢迎在 GitHub 上点一个 Star（注册个免费账号就能点）：' -ForegroundColor DarkGray
+    Write-Host '  本安装器是免费开源项目。如果对你有帮助，欢迎在 GitHub 上点一个 Star：' -ForegroundColor DarkGray
     Write-Host ('    ' + $RepoUrl) -ForegroundColor Cyan
     if ($WithPlugin) {
       Write-Host '  kb-rag 知识库插件是同一个作者的另一个开源项目，也欢迎 Star：' -ForegroundColor DarkGray
